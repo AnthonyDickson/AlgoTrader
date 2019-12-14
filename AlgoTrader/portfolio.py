@@ -129,6 +129,7 @@ class TickerPositionSummary:
         )
 
 
+# TODO: Include YoY P&L
 class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
 
@@ -139,28 +140,41 @@ class PortfolioSummary:
         :param stock_prices: The current prices of the securities present in the given portfolio.
         """
 
-        self.ticker_position_summaries: Dict[Ticker, TickerPositionSummary] = {
-            ticker: TickerPositionSummary(ticker, portfolio, stock_prices[ticker]) for ticker in portfolio.tickers
-        }
+        self.ticker_position_summaries: Dict[Ticker, TickerPositionSummary] = dict()
 
-        self.worst_performer_key = min(self.ticker_position_summaries,
-                                       key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
-        self.worst_performer = self.ticker_position_summaries[self.worst_performer_key]
+        for ticker in portfolio.tickers:
+            try:
+                self.ticker_position_summaries[ticker] = TickerPositionSummary(ticker, portfolio, stock_prices[ticker])
+            except KeyError:
+                print(f'WARNING: Missing stock prices for {ticker}.')
 
-        self.best_performer_key = max(self.ticker_position_summaries,
-                                      key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
-        self.best_performer = self.ticker_position_summaries[self.best_performer_key]
+        if len(portfolio.positions) > 0:
+            self.worst_performer_key = min(self.ticker_position_summaries,
+                                           key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+            self.worst_performer = self.ticker_position_summaries[self.worst_performer_key]
+
+            self.best_performer_key = max(self.ticker_position_summaries,
+                                          key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+            self.best_performer = self.ticker_position_summaries[self.best_performer_key]
+        else:
+            self.worst_performer_key = None
+            self.worst_performer = None
+            self.best_performer_key = None
+            self.best_performer = None
 
         self.total_open_position_value: float = 0.0
         self.net_realised_pl: float = 0.0
         self.net_unrealised_pl: float = 0.0
 
         for ticker in sorted(portfolio.tickers):
-            ticker_position_summary = self.ticker_position_summaries[ticker]
+            try:
+                ticker_position_summary = self.ticker_position_summaries[ticker]
 
-            self.total_open_position_value += ticker_position_summary.total_open_position_value
-            self.net_realised_pl += ticker_position_summary.realised_pl
-            self.net_unrealised_pl += ticker_position_summary.unrealised_pl
+                self.total_open_position_value += ticker_position_summary.total_open_position_value
+                self.net_realised_pl += ticker_position_summary.realised_pl
+                self.net_unrealised_pl += ticker_position_summary.unrealised_pl
+            except KeyError:
+                print(f'WARNING: Missing stock prices for {ticker}.')
 
         self.balance = portfolio.balance
         self.initial_balance = portfolio.initial_balance
@@ -180,16 +194,6 @@ class PortfolioSummary:
         result += '#' * 80 + '\n'
 
         result += '#' * 40 + '\n'
-        result += 'Position Summary by Ticker\n'
-        result += '#' * 40 + '\n'
-
-        for ticker in sorted(self.ticker_position_summaries.keys()):
-            result += f'{self.ticker_position_summaries[ticker]}\n'
-
-        result += f'Worst Performer P&L: [{self.worst_performer_key}] {self.worst_performer.net_pl:.2f} ({self.worst_performer.net_pl_percentage:.2f}%)\n'
-        result += f'Best Performer P&L:  [{self.best_performer_key}] {self.best_performer.net_pl:.2f} ({self.best_performer.net_pl_percentage:.2f}%)\n'
-
-        result += '#' * 40 + '\n'
         result += 'Portfolio Valuation\n'
         result += '#' * 40 + '\n'
 
@@ -199,6 +203,17 @@ class PortfolioSummary:
         result += f'Equity: {self.equity:.2f}\n'
         result += f'Net P&L: {self.net_pl:.2f} ({self.net_pl_percentage:.2f}%)\n'
         result += f'Realised P&L: {self.net_realised_pl:.2f} ({self.net_realised_pl_percentage:.2f}%)\n'
-        result += f'Unrealised P&L: {self.net_unrealised_pl:.2f} ({self.net_unrealised_pl_percentage:.2f}%)'
+        result += f'Unrealised P&L: {self.net_unrealised_pl:.2f} ({self.net_unrealised_pl_percentage:.2f}%)\n'
+
+        result += '#' * 40 + '\n'
+        result += 'Position Summary by Ticker\n'
+        result += '#' * 40 + '\n'
+
+        for ticker in sorted(self.ticker_position_summaries.keys()):
+            result += f'{self.ticker_position_summaries[ticker]}\n'
+
+        if self.worst_performer_key and self.worst_performer and self.best_performer_key and self.best_performer:
+            result += f'Worst Performer P&L: [{self.worst_performer_key}] {self.worst_performer.net_pl:.2f} ({self.worst_performer.net_pl_percentage:.2f}%)\n'
+            result += f'Best Performer P&L:  [{self.best_performer_key}] {self.best_performer.net_pl:.2f} ({self.best_performer.net_pl_percentage:.2f}%)\n'
 
         return result

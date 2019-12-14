@@ -1,10 +1,12 @@
-from typing import Dict
+import datetime
+import json
+import sqlite3
 
 import plac
 
-from AlgoTrader.core import Ticker, Position
+from AlgoTrader.core import Position
 from AlgoTrader.portfolio import Portfolio
-from AlgoTrader.utils import load_ticker_data, load_ticker_list
+from AlgoTrader.utils import load_ticker_list
 
 
 class MACDBot:
@@ -29,13 +31,13 @@ class MACDBot:
         :param prev_datum: The data for the given ticker for the previous day.
         """
         ticker_prefix = f'[{ticker}]'
-        log_prefix = f'[{datum["date_time"]}] {ticker_prefix:6s}'
+        log_prefix = f'[{datetime.datetime.fromtimestamp(datum["date"])}] {ticker_prefix:6s}'
 
         if prev_datum and datum['macd_histogram'] > 0 and datum['macd_line'] > datum['signal_line'] and prev_datum[
             'macd_line'] <= prev_datum['signal_line']:
             print(f'{log_prefix} Bullish crossover')
 
-            market_price = datum["close"]
+            market_price = datum["close_price"]
 
             if datum['macd_line'] < 0 and self.portfolio.balance >= market_price:
                 quantity: int = (0.01 * self.portfolio.balance) // market_price
@@ -48,7 +50,7 @@ class MACDBot:
             print(f'{log_prefix} Bearish crossover')
 
             if datum['macd_line'] > 0:
-                market_price = datum["close"]
+                market_price = datum["close_price"]
 
                 num_closed_positions: int = 0
                 quantity_sold: int = 0
@@ -77,31 +79,74 @@ class MACDBot:
 
 
 def main(ticker_list: ('The list of tickers to load data for.'),
-         data_directory: ('The directory that contains the ticker data') = 'data'):
+         config_file_path: "The path to the JSON file that contains the config data." = 'config.json',
+         initial_balance: ("How much cash the bot starts out with", "option") = 100000.00):
     """Simulate a trading bot that trades based on MACD crossovers and plots the estimated P/L."""
     tickers = load_ticker_list(ticker_list)
-    ticker_data = load_ticker_data(data_directory, tickers)
+    # ticker_data = load_ticker_data(data_directory, tickers)
 
-    print(ticker_list, data_directory)
+    print(ticker_list, config_file_path)
     print(tickers)
 
-    portfolio = Portfolio(initial_balance=100000.00)
+    with open(config_file_path, 'r') as file:
+        config = json.load(file)
+
+    db_connection = sqlite3.connect(config['DATABASE_URL'])
+    db_connection.row_factory = sqlite3.Row
+    db_cursor = db_connection.cursor()
+
+    db_cursor.execute('SELECT DISTINCT date FROM stock_data ORDER BY date;')
+    dates = list(map(lambda row: datetime.datetime.fromtimestamp(row['date']), db_cursor.fetchall()))
+
+    db_cursor.execute('SELECT ticker, date, close_price, macd_line, signal_line '
+                      'FROM stock_data '
+                      'WHERE date = ?', (dates[0].timestamp(),))
+    yesterdays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
+
+    portfolio = Portfolio(initial_balance=initial_balance)
     bot = MACDBot(portfolio)
 
-    prev_close_prices: Dict[Ticker, float] = dict()
+    for i in range(1, len(dates)):
+        today = dates[i]
 
-    for i in range(len(ticker_data[tickers[0]]['elements']) - 2, -1, -1):
+        db_cursor.execute('SELECT ticker, date, close_price, macd_histogram, macd_line, signal_line '
+                          'FROM stock_data '
+                          'WHERE date = ?', (today.timestamp(),))
+
+        todays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
+
         for ticker in tickers:
-            datum = ticker_data[ticker]['elements'][i]
-            # previous as in data from the previous day (data is stored in reverse chronological order)
-            prev_datum = ticker_data[ticker]['elements'][i + 1]
+            try:
+                datum = todays_data[ticker]
+                prev_datum = yesterdays_data[ticker]
+            except KeyError:
+                continue
 
             bot.update(ticker, datum, prev_datum)
 
-        for ticker in tickers:
-            prev_close_prices[ticker] = ticker_data[ticker]['elements'][i]['close']
+        # TODO: Fix missing reports - first of month doesn't always land on a weekday.
+        #  Should make sure day is first weekday of month.
+        if today.month % 3 == 1 and today.day == 1:
+            quarter = today.month // 3
+            year = today.year
 
-    portfolio.print_summary(prev_close_prices)
+            if quarter == 0:
+                quarter = 4
+                year -= 1
+
+            print(f'Q{quarter} {year} Report')
+            portfolio.print_summary(
+                {ticker: yesterdays_data[ticker]['close_price'] for ticker in yesterdays_data}
+            )
+
+        yesterdays_data = todays_data
+
+    portfolio.print_summary(
+        {ticker: yesterdays_data[ticker]['close_price'] for ticker in yesterdays_data}
+    )
+
+    db_cursor.close()
+    db_connection.close()
 
 
 if __name__ == '__main__':

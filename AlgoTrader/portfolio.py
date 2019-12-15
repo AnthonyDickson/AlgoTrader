@@ -1,12 +1,8 @@
 from typing import List, Set, Dict, Optional
 
+from AlgoTrader.exceptions import InsufficientFundsError
 from AlgoTrader.position import Position
 from AlgoTrader.ticker import Ticker
-
-
-class InsufficientFundsError(Exception):
-    """An exception indicated a lack of funds."""
-    pass
 
 
 class Portfolio:
@@ -231,18 +227,20 @@ class PortfolioSummary:
             self.net_pl_percentage = 0.0
 
         try:
-            self.net_realised_pl_percentage = self.total_closed_position_value / self.total_closed_position_cost * 100 - 100
+            self.net_realised_pl_percentage = \
+                self.total_closed_position_value / self.total_closed_position_cost * 100 - 100
         except ZeroDivisionError:
             self.net_realised_pl_percentage = 0.0
 
         try:
-            self.net_unrealised_pl_percentage = self.total_open_position_value / self.total_open_position_cost * 100 - 100
+            self.net_unrealised_pl_percentage = \
+                self.total_open_position_value / self.total_open_position_cost * 100 - 100
         except ZeroDivisionError:
             self.net_unrealised_pl_percentage = 0.0
 
         self.balance = portfolio.balance
         self.contribution = portfolio.contribution
-        self.equity = self.balance + self.net_pl
+        self.equity = self.balance + self.total_open_position_value
 
     def __str__(self) -> str:
         result = ''

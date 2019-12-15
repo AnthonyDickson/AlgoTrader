@@ -9,6 +9,8 @@ class Position:
         :param entry_price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
         """
+        assert quantity >= 1, 'Cannot open a position with less than one share.'
+
         self._ticker: Ticker = ticker
         self._entry_price: float = entry_price
         self._exit_price: float = 0.0
@@ -101,4 +103,5 @@ class Position:
         self._is_closed = True
 
     def __repr__(self):
-        return f'{self.__class__.__name__}(ticker={self._ticker}, entry_price={self.entry_price}, quantity={self.quantity})'
+        return (f'{self.__class__.__name__}(ticker={self._ticker}, entry_price={self.entry_price}, '
+                f'quantity={self.quantity})')

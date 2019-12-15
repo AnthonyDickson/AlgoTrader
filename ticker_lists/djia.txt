@@ -26,3 +26,5 @@ VZ
 V
 WMT
 DIS
+DOW
+WBA

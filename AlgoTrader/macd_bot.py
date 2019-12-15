@@ -31,13 +31,11 @@ class MACDBot:
         :param prev_datum: The data for the given ticker for the previous day.
         """
         ticker_prefix = f'[{ticker}]'
-        log_prefix = f'[{datetime.datetime.fromtimestamp(datum["date"])}] {ticker_prefix:6s}'
+        log_prefix = f'[{datum["datetime"]}] {ticker_prefix:6s}'
 
         if prev_datum and datum['macd_histogram'] > 0 and datum['macd_line'] > datum['signal_line'] and prev_datum[
             'macd_line'] <= prev_datum['signal_line']:
-            print(f'{log_prefix} Bullish crossover')
-
-            market_price = datum["close_price"]
+            market_price = datum['close']
 
             if datum['macd_line'] < 0 and self.portfolio.balance >= market_price:
                 quantity: int = (0.01 * self.portfolio.balance) // market_price
@@ -47,10 +45,8 @@ class MACDBot:
                 print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
         elif prev_datum and datum['macd_histogram'] < 0 and datum['macd_line'] < datum['signal_line'] and \
                 prev_datum['macd_line'] >= prev_datum['signal_line']:
-            print(f'{log_prefix} Bearish crossover')
-
             if datum['macd_line'] > 0:
-                market_price = datum["close_price"]
+                market_price = datum['close']
 
                 num_closed_positions: int = 0
                 quantity_sold: int = 0
@@ -78,12 +74,23 @@ class MACDBot:
                         f'{avg_cost:.2f}/share).')
 
 
-def main(ticker_list: ('The list of tickers to load data for.'),
-         config_file_path: "The path to the JSON file that contains the config data." = 'config.json',
-         initial_balance: ("How much cash the bot starts out with", "option") = 100000.00):
+def fetch_daily_data(date, db_cursor):
+    db_cursor.execute('SELECT ticker, datetime, close, macd_histogram, macd_line, signal_line '
+                      'FROM daily_stock_data '
+                      'WHERE datetime = ?', (date,))
+    yesterdays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
+    return yesterdays_data
+
+
+# TODO: Adjust for stock splits.
+@plac.annotations(
+    ticker_list=plac.Annotation('The list of tickers to load data for.'),
+    config_file_path=plac.Annotation('The path to the JSON file that contains the config data.'),
+    initial_balance=plac.Annotation('How much cash the bot starts out with', kind='option')
+)
+def main(ticker_list: str, config_file_path: str = 'config.json', initial_balance: float = 100000.00):
     """Simulate a trading bot that trades based on MACD crossovers and plots the estimated P/L."""
     tickers = load_ticker_list(ticker_list)
-    # ticker_data = load_ticker_data(data_directory, tickers)
 
     print(ticker_list, config_file_path)
     print(tickers)
@@ -95,25 +102,17 @@ def main(ticker_list: ('The list of tickers to load data for.'),
     db_connection.row_factory = sqlite3.Row
     db_cursor = db_connection.cursor()
 
-    db_cursor.execute('SELECT DISTINCT date FROM stock_data ORDER BY date;')
-    dates = list(map(lambda row: datetime.datetime.fromtimestamp(row['date']), db_cursor.fetchall()))
+    db_cursor.execute('SELECT DISTINCT datetime FROM daily_stock_data ORDER BY datetime;')
+    dates = list(map(lambda row: row['datetime'], db_cursor.fetchall()))
 
-    db_cursor.execute('SELECT ticker, date, close_price, macd_line, signal_line '
-                      'FROM stock_data '
-                      'WHERE date = ?', (dates[0].timestamp(),))
-    yesterdays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
+    yesterdays_data = fetch_daily_data(dates[0], db_cursor)
 
     portfolio = Portfolio(initial_balance=initial_balance)
     bot = MACDBot(portfolio)
 
     for i in range(1, len(dates)):
-        today = dates[i]
-
-        db_cursor.execute('SELECT ticker, date, close_price, macd_histogram, macd_line, signal_line '
-                          'FROM stock_data '
-                          'WHERE date = ?', (today.timestamp(),))
-
-        todays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
+        today = datetime.datetime.fromisoformat(dates[i])
+        todays_data = fetch_daily_data(today.isoformat(), db_cursor)
 
         for ticker in tickers:
             try:
@@ -136,13 +135,13 @@ def main(ticker_list: ('The list of tickers to load data for.'),
 
             print(f'Q{quarter} {year} Report')
             portfolio.print_summary(
-                {ticker: yesterdays_data[ticker]['close_price'] for ticker in yesterdays_data}
+                {ticker: yesterdays_data[ticker]['close'] for ticker in yesterdays_data}
             )
 
         yesterdays_data = todays_data
 
     portfolio.print_summary(
-        {ticker: yesterdays_data[ticker]['close_price'] for ticker in yesterdays_data}
+        {ticker: yesterdays_data[ticker]['close'] for ticker in yesterdays_data}
     )
 
     db_cursor.close()

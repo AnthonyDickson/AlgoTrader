@@ -17,7 +17,7 @@ def load_ticker_data(data_directory, tickers):
 
 def load_ticker_list(ticker_list):
     with open(ticker_list, 'r') as file:
-        tickers = list(map(lambda line: line.strip(), file.readlines()))
+        tickers = set(map(lambda line: line.strip(), file.readlines()))
 
     if len(tickers) == 0:
         raise ValueError("ERROR: Empty ticker list.")

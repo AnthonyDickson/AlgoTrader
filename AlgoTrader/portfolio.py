@@ -174,11 +174,13 @@ class PortfolioSummary:
 
         if len(portfolio.positions) > 0:
             self.worst_performer_ticker = min(self.ticker_position_summaries,
-                                              key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+                                              key=lambda ticker: self.ticker_position_summaries[
+                                                  ticker].net_pl_percentage)
             self.worst_performer = self.ticker_position_summaries[self.worst_performer_ticker]
 
             self.best_performer_ticker = max(self.ticker_position_summaries,
-                                             key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+                                             key=lambda ticker: self.ticker_position_summaries[
+                                                 ticker].net_pl_percentage)
             self.best_performer = self.ticker_position_summaries[self.best_performer_ticker]
 
             self.least_frequently_traded_ticker = \
@@ -220,11 +222,23 @@ class PortfolioSummary:
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
 
         self.net_pl = self.total_position_value - self.total_position_cost
-        self.net_pl_percentage = self.total_position_value / self.total_position_cost * 100 - 100
         self.net_realised_pl = self.total_closed_position_value - self.total_closed_position_cost
-        self.net_realised_pl_percentage = self.total_closed_position_value / self.total_closed_position_cost * 100 - 100
         self.net_unrealised_pl = self.total_open_position_value - self.total_open_position_cost
-        self.net_unrealised_pl_percentage = self.total_open_position_value / self.total_open_position_cost * 100 - 100
+
+        try:
+            self.net_pl_percentage = self.total_position_value / self.total_position_cost * 100 - 100
+        except ZeroDivisionError:
+            self.net_pl_percentage = 0.0
+
+        try:
+            self.net_realised_pl_percentage = self.total_closed_position_value / self.total_closed_position_cost * 100 - 100
+        except ZeroDivisionError:
+            self.net_realised_pl_percentage = 0.0
+
+        try:
+            self.net_unrealised_pl_percentage = self.total_open_position_value / self.total_open_position_cost * 100 - 100
+        except ZeroDivisionError:
+            self.net_unrealised_pl_percentage = 0.0
 
         self.balance = portfolio.balance
         self.contribution = portfolio.contribution

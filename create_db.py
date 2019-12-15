@@ -135,6 +135,7 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
         DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
         DROP TABLE IF EXISTS "portfolio";
         DROP TABLE IF EXISTS "position";
+        DROP TABLE IF EXISTS "bots";
         ''')
 
     with open(config['DATABASE_CREATE_SCRIPT'], 'r') as file:
@@ -147,6 +148,9 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
     num_tickers_processed = 0
 
     for ticker in tickers:
+        # TODO: Either remove this or add flag enable this feature.
+        #  Perhaps should not skip tickers that already in the database so that we can update the database with new
+        #  daily data.
         if append:
             db_cursor.execute('SELECT COUNT(ticker) FROM daily_stock_data WHERE ticker = ?', (ticker,))
 
@@ -174,7 +178,7 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
         if num_requests_for_batch + 2 > max_requests_per_minute:
             log(f'Reached maximum number requests for time period ({max_requests_per_minute}/minute).')
 
-            time_to_wait = 60 - int(time.time() - batch_start) + 1
+            time_to_wait = 60 - int(time.time() - batch_start) + 3
             time_left = time_to_wait
 
             while time_left > 0:

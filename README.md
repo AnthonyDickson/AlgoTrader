@@ -1,5 +1,10 @@
 # AlgoTrader
-# Getting Started
+In this project, I attempt to implement AI agents that trade US equities.
+
+## Documentation
+Documentation is hosted on [GitBook](https://app.gitbook.com/@dican732/s/algotrading/).
+
+## Getting Started
 1.  Go to [alphavantage.co](https://www.alphavantage.co/support/#api-key) and get an API key (this is free).
     Make sure you write down your API key somewhere - the only way to get it again if you forget is by emailing their 
     support team.
@@ -39,7 +44,9 @@
     ```
     Without this flag, the script will delete all data in the database.
     
+    Alternatively, you can download a ready-made version from [here](https://drive.google.com/file/d/10ivA-U-nbpmXK4EWsRyiOX-UhvVcyk9m/view).
+    
 7.  Run a demo scipt, e.g.:
     ```bash
-    python -m AlgoTrader.macd_trader djia_tickers.txt
+    python -m demo.macd_trader ticker_lists/djia_tickers.txt
     ```

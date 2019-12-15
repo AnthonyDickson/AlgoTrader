@@ -40,4 +40,11 @@ CREATE TABLE IF NOT EXISTS "position"
     "is_closed"    INTEGER NOT NULL CHECK (is_closed = 0 OR is_closed = 1),
     FOREIGN KEY ("portfolio_id") REFERENCES "portfolio" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+CREATE TABLE IF NOT EXISTS "bots"
+(
+    "id"           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+    "portfolio_id" INTEGER NOT NULL,
+    "git_hash"     TEXT    NOT NULL,
+    FOREIGN KEY ("portfolio_id") REFERENCES "portfolio" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
 COMMIT;

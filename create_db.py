@@ -7,7 +7,7 @@ import time
 import plac
 import requests
 
-from AlgoTrader.utils import load_ticker_list
+from AlgoTrader.ticker import load_ticker_list
 
 
 def log(msg: str, msg_type='INFO', inplace=False):
@@ -131,6 +131,8 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
     if not append:
         db_cursor.executescript('''        
         DROP TABLE IF EXISTS "daily_stock_data";
+        DROP INDEX IF EXISTS "daily_stock_data_ticker_index";
+        DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
         DROP TABLE IF EXISTS "portfolio";
         DROP TABLE IF EXISTS "position";
         ''')
@@ -142,6 +144,7 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
 
     batch_start = time.time()
     num_requests_for_batch = 0
+    num_tickers_processed = 0
 
     for ticker in tickers:
         if append:
@@ -186,13 +189,23 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
 
         log(f'Fetching data for {ticker}... ')
 
-        r = requests.get(api_url, params=stock_price_payload)
-        r.raise_for_status()
-        stock_price_data = r.json()
+        try:
+            r = requests.get(api_url, params=stock_price_payload)
+            r.raise_for_status()
+            stock_price_data = r.json()
 
-        r = requests.get(api_url, params=macd_payload)
-        r.raise_for_status()
-        macd_data = r.json()
+            r = requests.get(api_url, params=macd_payload)
+            r.raise_for_status()
+            macd_data = r.json()
+        except requests.exceptions.HTTPError as e:
+            db_connection.rollback()
+
+            log(f'HTTP {e}', msg_type='ERROR')
+
+            if e.response.status_code == 503:
+                log(f'It is likely that you have hit your daily API limit.', msg_type='ERROR')
+
+            break
 
         num_requests_for_batch += 2
 
@@ -205,6 +218,7 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
 
         db_connection.commit()
 
+        num_tickers_processed += 1
         ticker_elapsed_time = time.time() - ticker_start
         elapsed_time_str = time.strftime("%H:%M:%S", time.gmtime(ticker_elapsed_time))
         log(f'Processed data for {ticker} in {elapsed_time_str}')
@@ -214,7 +228,7 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
     db_connection.close()
 
     elapsed_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
-    log(f'Processed data for {len(tickers)} tickers in {elapsed_time}\n')
+    log(f'Processed data for {num_tickers_processed} tickers in {elapsed_time}\n')
 
 
 if __name__ == '__main__':

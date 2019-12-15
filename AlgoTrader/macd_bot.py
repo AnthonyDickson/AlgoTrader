@@ -4,9 +4,9 @@ import sqlite3
 
 import plac
 
-from AlgoTrader.core import Position
 from AlgoTrader.portfolio import Portfolio
-from AlgoTrader.utils import load_ticker_list
+from AlgoTrader.position import Position
+from AlgoTrader.ticker import load_ticker_list
 
 
 class MACDBot:
@@ -86,9 +86,11 @@ def fetch_daily_data(date, db_cursor):
 @plac.annotations(
     ticker_list=plac.Annotation('The list of tickers to load data for.'),
     config_file_path=plac.Annotation('The path to the JSON file that contains the config data.'),
-    initial_balance=plac.Annotation('How much cash the bot starts out with', kind='option')
+    initial_balance=plac.Annotation('How much cash the bot starts out with', kind='option'),
+    yearly_contribution=plac.Annotation('How much cash the bot adds to its portfolio on a yearly basis', kind='option')
 )
-def main(ticker_list: str, config_file_path: str = 'config.json', initial_balance: float = 100000.00):
+def main(ticker_list: str, config_file_path: str = 'config.json',
+         initial_balance: float = 100000.00, yearly_contribution=10000.0):
     """Simulate a trading bot that trades based on MACD crossovers and plots the estimated P/L."""
     tickers = load_ticker_list(ticker_list)
 
@@ -105,7 +107,8 @@ def main(ticker_list: str, config_file_path: str = 'config.json', initial_balanc
     db_cursor.execute('SELECT DISTINCT datetime FROM daily_stock_data ORDER BY datetime;')
     dates = list(map(lambda row: row['datetime'], db_cursor.fetchall()))
 
-    yesterdays_data = fetch_daily_data(dates[0], db_cursor)
+    yesterday = datetime.datetime.fromisoformat(dates[0])
+    yesterdays_data = fetch_daily_data(yesterday.isoformat(), db_cursor)
 
     portfolio = Portfolio(initial_balance=initial_balance)
     bot = MACDBot(portfolio)
@@ -123,9 +126,11 @@ def main(ticker_list: str, config_file_path: str = 'config.json', initial_balanc
 
             bot.update(ticker, datum, prev_datum)
 
-        # TODO: Fix missing reports - first of month doesn't always land on a weekday.
-        #  Should make sure day is first weekday of month.
-        if today.month % 3 == 1 and today.day == 1:
+        first_month_in_quarter = today.month % 3 == 1
+        has_entered_new_month = (today.month > yesterday.month or (today.month == 1 and yesterday.month == 12))
+        is_time_for_report = first_month_in_quarter and has_entered_new_month
+
+        if is_time_for_report:
             quarter = today.month // 3
             year = today.year
 
@@ -133,11 +138,15 @@ def main(ticker_list: str, config_file_path: str = 'config.json', initial_balanc
                 quarter = 4
                 year -= 1
 
-            print(f'Q{quarter} {year} Report')
+            print(f'{year} Q{quarter} Report')
             portfolio.print_summary(
                 {ticker: yesterdays_data[ticker]['close'] for ticker in yesterdays_data}
             )
 
+        if today.year > yesterday.year:
+            portfolio.add(yearly_contribution)
+
+        yesterday = today
         yesterdays_data = todays_data
 
     portfolio.print_summary(

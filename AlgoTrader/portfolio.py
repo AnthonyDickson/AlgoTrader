@@ -1,6 +1,7 @@
 from typing import List, Set, Dict, Optional
 
-from AlgoTrader.core import Position, Ticker
+from AlgoTrader.position import Position
+from AlgoTrader.ticker import Ticker
 
 
 class InsufficientFundsError(Exception):
@@ -11,7 +12,7 @@ class InsufficientFundsError(Exception):
 class Portfolio:
     def __init__(self, initial_balance: float = 100000.00):
         self._balance: float = initial_balance
-        self._initial_balance: float = initial_balance
+        self._contribution: float = initial_balance
 
         self._positions: List[Position] = []
         self._tickers: Set[Ticker] = set()
@@ -22,9 +23,12 @@ class Portfolio:
         return self._tickers
 
     @property
-    def initial_balance(self):
-        """The available amount of cash that the portfolio started with."""
-        return self._initial_balance
+    def contribution(self):
+        """
+        The amount of cash that has been added to the portfolio
+        (e.g. the user transferring money into their brokerage account).
+        """
+        return self._contribution
 
     @property
     def balance(self) -> float:
@@ -85,6 +89,17 @@ class Portfolio:
 
         print(PortfolioSummary(self, stock_prices))
 
+    def add(self, amount: float):
+        """
+        Add an amount of cash to the balance of this portfolio.
+        :param amount: The amount to add to the portfolio.
+        """
+        if amount <= 0:
+            raise ValueError(f'Cannot add zero or negative amount {amount} to balance.')
+
+        self._balance += amount
+        self._contribution += amount
+
 
 class TickerPositionSummary:
     """Summary report for all positions for a given ticker."""
@@ -105,11 +120,20 @@ class TickerPositionSummary:
         )
 
         self.ticker = ticker
-        self.total_position_cost = sum(position.cost for position in open_positions) + \
-                                   sum(position.cost for position in closed_positions)
+
+        self.total_num_open_positions = len(open_positions)
+        self.total_num_closed_positions = len(closed_positions)
+        self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
+
         self.total_open_position_value = \
-            sum(position.quantity * stock_price for position in open_positions)
+            sum(position.current_value(stock_price) for position in open_positions)
+        self.total_closed_position_value = \
+            sum(position.exit_value for position in closed_positions)
+        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
+
         self.total_open_position_cost = sum(position.cost for position in open_positions)
+        self.total_closed_position_cost = sum(position.cost for position in closed_positions)
+        self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
 
         self.realised_pl = sum(position.pl_realised for position in closed_positions)
         self.unrealised_pl = sum(position.pl_unrealised(stock_price) for position in open_positions)
@@ -149,42 +173,62 @@ class PortfolioSummary:
                 print(f'WARNING: Missing stock prices for {ticker}.')
 
         if len(portfolio.positions) > 0:
-            self.worst_performer_key = min(self.ticker_position_summaries,
-                                           key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
-            self.worst_performer = self.ticker_position_summaries[self.worst_performer_key]
+            self.worst_performer_ticker = min(self.ticker_position_summaries,
+                                              key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+            self.worst_performer = self.ticker_position_summaries[self.worst_performer_ticker]
 
-            self.best_performer_key = max(self.ticker_position_summaries,
-                                          key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
-            self.best_performer = self.ticker_position_summaries[self.best_performer_key]
+            self.best_performer_ticker = max(self.ticker_position_summaries,
+                                             key=lambda ticker: self.ticker_position_summaries[ticker].net_pl)
+            self.best_performer = self.ticker_position_summaries[self.best_performer_ticker]
+
+            self.least_frequently_traded_ticker = \
+                min(self.ticker_position_summaries,
+                    key=lambda ticker: self.ticker_position_summaries[ticker].total_num_positions)
+            self.least_frequently_traded = self.ticker_position_summaries[self.least_frequently_traded_ticker]
+
+            self.most_frequently_traded_ticker = \
+                max(self.ticker_position_summaries,
+                    key=lambda ticker: self.ticker_position_summaries[ticker].total_num_positions)
+            self.most_frequently_traded = self.ticker_position_summaries[self.most_frequently_traded_ticker]
         else:
-            self.worst_performer_key = None
+            self.worst_performer_ticker = None
             self.worst_performer = None
-            self.best_performer_key = None
+            self.best_performer_ticker = None
             self.best_performer = None
+            self.least_frequently_traded_ticker = None
+            self.least_frequently_traded = None
+            self.most_frequently_traded_ticker = None
+            self.most_frequently_traded = None
 
         self.total_open_position_value: float = 0.0
-        self.net_realised_pl: float = 0.0
-        self.net_unrealised_pl: float = 0.0
+        self.total_closed_position_value: float = 0.0
+        self.total_open_position_cost: float = 0.0
+        self.total_closed_position_cost: float = 0.0
 
-        for ticker in sorted(portfolio.tickers):
+        for ticker in portfolio.tickers:
             try:
                 ticker_position_summary = self.ticker_position_summaries[ticker]
 
                 self.total_open_position_value += ticker_position_summary.total_open_position_value
-                self.net_realised_pl += ticker_position_summary.realised_pl
-                self.net_unrealised_pl += ticker_position_summary.unrealised_pl
+                self.total_closed_position_value += ticker_position_summary.total_closed_position_value
+                self.total_open_position_cost += ticker_position_summary.total_open_position_cost
+                self.total_closed_position_cost += ticker_position_summary.total_closed_position_cost
             except KeyError:
                 print(f'WARNING: Missing stock prices for {ticker}.')
 
+        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
+        self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
+
+        self.net_pl = self.total_position_value - self.total_position_cost
+        self.net_pl_percentage = self.total_position_value / self.total_position_cost * 100 - 100
+        self.net_realised_pl = self.total_closed_position_value - self.total_closed_position_cost
+        self.net_realised_pl_percentage = self.total_closed_position_value / self.total_closed_position_cost * 100 - 100
+        self.net_unrealised_pl = self.total_open_position_value - self.total_open_position_cost
+        self.net_unrealised_pl_percentage = self.total_open_position_value / self.total_open_position_cost * 100 - 100
+
         self.balance = portfolio.balance
-        self.initial_balance = portfolio.initial_balance
-        self.equity = self.balance + self.total_open_position_value
-        self.net_change = self.balance - self.initial_balance
-        self.net_change_percentage = self.balance / self.initial_balance * 100 - 100
-        self.net_pl = self.equity - self.initial_balance
-        self.net_pl_percentage = self.net_pl / self.initial_balance * 100
-        self.net_realised_pl_percentage = self.net_realised_pl / self.initial_balance * 100
-        self.net_unrealised_pl_percentage = self.net_unrealised_pl / self.initial_balance * 100
+        self.contribution = portfolio.contribution
+        self.equity = self.balance + self.net_pl
 
     def __str__(self) -> str:
         result = ''
@@ -197,13 +241,32 @@ class PortfolioSummary:
         result += 'Portfolio Valuation\n'
         result += '#' * 40 + '\n'
 
-        result += f'Initial Balance: {self.initial_balance:.2f}\n'
-        result += f'Balance: {self.balance:.2f}\n'
-        result += f'Total Open Position Value: {self.total_open_position_value:.2f}\n'
         result += f'Equity: {self.equity:.2f}\n'
+        result += f'Total Contribution: {self.contribution:.2f}\n'
+        result += f'Balance: {self.balance:.2f}\n'
         result += f'Net P&L: {self.net_pl:.2f} ({self.net_pl_percentage:.2f}%)\n'
         result += f'Realised P&L: {self.net_realised_pl:.2f} ({self.net_realised_pl_percentage:.2f}%)\n'
         result += f'Unrealised P&L: {self.net_unrealised_pl:.2f} ({self.net_unrealised_pl_percentage:.2f}%)\n'
+        result += '\n'
+
+        result += (f'Total Open Position Value/Cost: {self.total_open_position_value:.2f} / '
+                   f'{self.total_open_position_cost:.2f}\n')
+        result += (f'Total Closed Position Value/Cost: {self.total_closed_position_value:.2f} / '
+                   f'{self.total_closed_position_cost:.2f}\n')
+
+        if self.worst_performer_ticker and self.best_performer_ticker and self.most_frequently_traded_ticker:
+            result += (f'Worst Performer P&L: [{self.worst_performer_ticker}] {self.worst_performer.net_pl:.2f} '
+                       f'({self.worst_performer.net_pl_percentage:.2f}%)\n')
+            result += (f'Best Performer P&L:  [{self.best_performer_ticker}] {self.best_performer.net_pl:.2f} '
+                       f'({self.best_performer.net_pl_percentage:.2f}%)\n')
+            result += (f'Least Frequently Traded:  [{self.least_frequently_traded_ticker}] '
+                       f'{self.least_frequently_traded.total_num_positions} positions '
+                       f'({self.least_frequently_traded.total_num_open_positions} open, '
+                       f'{self.least_frequently_traded.total_num_closed_positions} closed)\n')
+            result += (f'Most Frequently Traded:  [{self.most_frequently_traded_ticker}] '
+                       f'{self.most_frequently_traded.total_num_positions} positions '
+                       f'({self.most_frequently_traded.total_num_open_positions} open, '
+                       f'{self.most_frequently_traded.total_num_closed_positions} closed)\n')
 
         result += '#' * 40 + '\n'
         result += 'Position Summary by Ticker\n'
@@ -211,9 +274,5 @@ class PortfolioSummary:
 
         for ticker in sorted(self.ticker_position_summaries.keys()):
             result += f'{self.ticker_position_summaries[ticker]}\n'
-
-        if self.worst_performer_key and self.worst_performer and self.best_performer_key and self.best_performer:
-            result += f'Worst Performer P&L: [{self.worst_performer_key}] {self.worst_performer.net_pl:.2f} ({self.worst_performer.net_pl_percentage:.2f}%)\n'
-            result += f'Best Performer P&L:  [{self.best_performer_key}] {self.best_performer.net_pl:.2f} ({self.best_performer.net_pl_percentage:.2f}%)\n'
 
         return result

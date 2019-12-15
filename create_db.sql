@@ -16,6 +16,12 @@ CREATE TABLE IF NOT EXISTS "daily_stock_data"
     "signal_line"       REAL    NOT NULL,
     PRIMARY KEY ("ticker", "datetime")
 );
+CREATE INDEX IF NOT EXISTS "daily_stock_data_ticker_index" ON "daily_stock_data" (
+                                                                                  "ticker" ASC
+    );
+CREATE INDEX IF NOT EXISTS "daily_stock_data_datetime_index" ON "daily_stock_data" (
+                                                                                    "datetime" ASC
+    );
 CREATE TABLE IF NOT EXISTS "portfolio"
 (
     "id"              INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,

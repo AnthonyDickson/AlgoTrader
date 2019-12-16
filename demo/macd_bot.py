@@ -1,11 +1,12 @@
 import datetime
+import json
+import sqlite3
 
 import plac
 
 from AlgoTrader.bot import MACDBot
-from AlgoTrader.portfolio import Portfolio
-from AlgoTrader.ticker import load_ticker_list
-from AlgoTrader.utils import main_loop
+from AlgoTrader.broker import Broker
+from AlgoTrader.utils import main_loop, load_ticker_list
 
 
 def fetch_daily_data(date: datetime.datetime, db_cursor):
@@ -18,7 +19,6 @@ def fetch_daily_data(date: datetime.datetime, db_cursor):
     return yesterdays_data
 
 
-# TODO: Adjust for stock splits.
 @plac.annotations(
     ticker_list=plac.Annotation('The list of tickers to load data for.'),
     config_file_path=plac.Annotation('The path to the JSON file that contains the config data.'),
@@ -33,10 +33,19 @@ def main(ticker_list: str, config_file_path: str = 'config.json',
     print(ticker_list, config_file_path)
     print(tickers)
 
-    portfolio = Portfolio(initial_balance=initial_balance)
-    bot = MACDBot(portfolio)
+    with open(config_file_path, 'r') as file:
+        config = json.load(file)
 
-    main_loop(bot, tickers, yearly_contribution, config_file_path, fetch_daily_data)
+    db_connection = sqlite3.connect(config['DATABASE_URL'])
+    db_connection.row_factory = sqlite3.Row
+
+    broker = Broker(db_connection)
+    bot = MACDBot(broker)
+    bot.portfolio_id = broker.create_portfolio(bot.name, initial_balance)
+
+    main_loop(bot, broker, tickers, yearly_contribution, db_connection, fetch_daily_data)
+
+    db_connection.close()
 
 
 if __name__ == '__main__':

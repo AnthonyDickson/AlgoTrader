@@ -1,15 +1,17 @@
 import abc
+from typing import Optional
 
-from AlgoTrader.portfolio import Portfolio
+from AlgoTrader.broker import Broker
+from AlgoTrader.types import PortfolioID
 
 
 # noinspection PyUnusedLocal
 class ITradingBot(abc.ABC):
-    def __init__(self, initial_portfolio: Portfolio, git_hash: str = 'infer'):
+    def __init__(self, broker: Broker):
         """
         Create a new bot.
-        :param initial_portfolio: The portfolio that the bot starts with.
-        :param git_hash: The
+
+        :param broker: The broker that will facilitate trades.
         """
         ...
 
@@ -24,6 +26,19 @@ class ITradingBot(abc.ABC):
         raise NotImplementedError
 
     @property
-    def portfolio(self) -> Portfolio:
-        """Get the bot's portfolio."""
+    def portfolio_id(self) -> Optional[PortfolioID]:
+        """Get the bot's current portfolio's ID."""
+        raise NotImplementedError
+
+    @portfolio_id.setter
+    def portfolio_id(self, value: PortfolioID):
+        """
+        Set the bot's current portfolio ID.
+        This will affect which portfolio the bot will use for any future trades.
+        """
+        raise NotImplementedError
+
+    @property
+    def name(self) -> str:
+        """Get the name of the bot."""
         raise NotImplementedError

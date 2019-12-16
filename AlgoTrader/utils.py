@@ -1,41 +1,25 @@
 import datetime
-import json
 import sqlite3
-import subprocess
 from typing import Set, Callable, Dict, Any
 
+from AlgoTrader.broker import Broker
 from AlgoTrader.interfaces import ITradingBot
-from AlgoTrader.ticker import Ticker
+from AlgoTrader.types import Ticker
 
 
-def get_git_revision_hash(short=False) -> str:
-    """
-    Get the sha1 hash of the current revision for the git repo.
-    :param short: Whether or not to generate the short hash.
-    :return: the sha1 hash of the current revision.
-    """
-    if short:
-        return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'])
-    else:
-        return subprocess.check_output(['git', 'rev-parse', 'HEAD'])
-
-
-def main_loop(bot: ITradingBot, tickers: Set[Ticker], yearly_contribution: float, config_file_path: str,
+def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], yearly_contribution: float,
+              db_connection: sqlite3.Connection,
               fetch_data_fn: Callable[[datetime.datetime, sqlite3.Cursor], Dict[Ticker, Dict[str, Any]]]):
     """
     Test a bot on historical data and log its buy/sell actions and reports.
 
     :param bot: The bot to test.
+    :param broker: The broker that will facilitate trades.
     :param tickers: The tickers that the bot should buy and sell.
     :param yearly_contribution: How much cash gets added to the bot's portfolio at the start of each year.
-    :param config_file_path: The path to the config file (typically config.json).
+    :param db_connection: A connection to a database that can be queried for daily stock data.
     :param fetch_data_fn: The function that fetches the data for a given day.
     """
-    with open(config_file_path, 'r') as file:
-        config = json.load(file)
-
-    db_connection = sqlite3.connect(config['DATABASE_URL'])
-    db_connection.row_factory = sqlite3.Row
     db_cursor = db_connection.cursor()
 
     db_cursor.execute('SELECT DISTINCT datetime FROM daily_stock_data ORDER BY datetime;')
@@ -47,6 +31,8 @@ def main_loop(bot: ITradingBot, tickers: Set[Ticker], yearly_contribution: float
     for i in range(1, len(dates)):
         today = datetime.datetime.fromisoformat(dates[i])
         todays_data = fetch_data_fn(today, db_cursor)
+
+        broker.update(today)
 
         for ticker in tickers:
             try:
@@ -70,19 +56,37 @@ def main_loop(bot: ITradingBot, tickers: Set[Ticker], yearly_contribution: float
                 year -= 1
 
             print(f'{year} Q{quarter} Report')
-            bot.portfolio.print_summary(
-                {ticker: yesterdays_data[ticker]['close'] for ticker in yesterdays_data}
-            )
+            broker.print_report(bot.portfolio_id, today)
 
         if today.year > yesterday.year:
-            bot.portfolio.add(yearly_contribution)
+            broker.add_contribution(yearly_contribution, bot.portfolio_id)
 
         yesterday = today
         yesterdays_data = todays_data
 
-    bot.portfolio.print_summary(
-        {ticker: yesterdays_data[ticker]['close'] for ticker in yesterdays_data}
-    )
+    broker.print_report(bot.portfolio_id, yesterday)
 
     db_cursor.close()
-    db_connection.close()
+
+
+def load_ticker_list(ticker_list) -> Set[Ticker]:
+    """
+    Load and parse a list of tickers.
+
+    Note: The file is expected to have one ticker per line.
+    :param ticker_list: The path to the file that contains the list of tickers.
+    :return: A set of tickers.
+    """
+    with open(ticker_list, 'r') as file:
+        tickers = set()
+
+        for line in file:
+            ticker = line.strip()
+            ticker = ticker.replace('.', '-')
+            # Manually cast to Ticker to get rid of linter warnings.
+            tickers.add(Ticker(ticker))
+
+    if len(tickers) == 0:
+        raise ValueError("ERROR: Empty ticker list.")
+
+    return tickers

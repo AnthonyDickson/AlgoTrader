@@ -1,17 +1,28 @@
+import hashlib
 from typing import List, Set, Dict, Optional
 
 from AlgoTrader.exceptions import InsufficientFundsError
 from AlgoTrader.position import Position
-from AlgoTrader.ticker import Ticker
+from AlgoTrader.types import PortfolioID, Ticker
 
 
 class Portfolio:
-    def __init__(self, initial_balance: float = 100000.00):
-        self._balance: float = initial_balance
-        self._contribution: float = initial_balance
+    _next_id = 0
+
+    def __init__(self, owner_name: str, initial_contribution: float = 0.00):
+        self._balance: float = initial_contribution
+        self._contribution: float = initial_contribution
 
         self._positions: List[Position] = []
         self._tickers: Set[Ticker] = set()
+
+        self._owner_name = owner_name
+        self._id: PortfolioID = hashlib.sha1(bytes(Portfolio._next_id)).hexdigest()
+        Portfolio._next_id += 1
+
+    @property
+    def id(self) -> PortfolioID:
+        return self._id
 
     @property
     def tickers(self) -> Set[Ticker]:
@@ -85,16 +96,26 @@ class Portfolio:
 
         print(PortfolioSummary(self, stock_prices))
 
-    def add(self, amount: float):
+    def add_contribution(self, amount: float):
         """
-        Add an amount of cash to the balance of this portfolio.
+        Add an amount of cash to the balance of this portfolio as an contribution
+        (i.e. the owner adds money to their account themselves).
+
         :param amount: The amount to add to the portfolio.
         """
-        if amount <= 0:
-            raise ValueError(f'Cannot add zero or negative amount {amount} to balance.')
+        self.pay(amount)
+        self._contribution += amount
+
+    def pay(self, amount: float):
+        """
+        Add an amount of cash to the balance of this portfolio.
+
+        :param amount: The amount to add to the portfolio.
+        """
+        if amount < 0:
+            raise ValueError(f'Cannot add negative amount {amount} to balance.')
 
         self._balance += amount
-        self._contribution += amount
 
 
 class TickerPositionSummary:

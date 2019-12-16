@@ -7,7 +7,7 @@ import time
 import plac
 import requests
 
-from AlgoTrader.ticker import load_ticker_list
+from AlgoTrader.utils import load_ticker_list
 
 
 def log(msg: str, msg_type='INFO', inplace=False):

@@ -1,40 +1,37 @@
+import abc
 import datetime
 import enum
+import hashlib
+import time
+from typing import Optional
 
+from AlgoTrader.broker import Broker
 from AlgoTrader.exceptions import InsufficientFundsError
 from AlgoTrader.interfaces import ITradingBot
-from AlgoTrader.portfolio import Portfolio
-from AlgoTrader.position import Position
-from AlgoTrader.utils import get_git_revision_hash
+from AlgoTrader.types import PortfolioID
 
 
-class TradingBotABC(ITradingBot):
-    def __init__(self, initial_portfolio: Portfolio, git_hash: str = 'infer'):
-        """
-        Create a new bot.
-        :param initial_portfolio: The portfolio that the bot starts with.
-        :param git_hash: The
-        """
+class TradingBotABC(ITradingBot, abc.ABC):
+    def __init__(self, broker: Broker):
         # Here to satisfy the linter.
-        super().__init__(initial_portfolio, git_hash)
+        super().__init__(broker)
 
-        self._portfolio = initial_portfolio
-
-        self.git_hash = git_hash if git_hash != 'infer' else get_git_revision_hash()
+        self._broker = broker
+        sha1_hash = hashlib.sha1(bytes(int(time.time())))
+        self._name = self.__class__.__name__ + '_' + sha1_hash.hexdigest()
+        self._portfolio_id: Optional[PortfolioID] = None
 
     @property
-    def portfolio(self) -> Portfolio:
-        return self._portfolio
+    def name(self) -> str:
+        return self._name
 
-    def update(self, ticker, datum, prev_datum):
-        """
-        Perform an update step where the bot may or may not open or close positions.
-        :param ticker: The ticker of the security to focus on.
-        :param datum: The data for the given ticker for a given day. This should include both close prices and
-        MACD information.
-        :param prev_datum: The data for the given ticker for the previous day.
-        """
-        raise NotImplementedError
+    @property
+    def portfolio_id(self) -> Optional[PortfolioID]:
+        return self._portfolio_id
+
+    @portfolio_id.setter
+    def portfolio_id(self, value: PortfolioID):
+        self._portfolio_id = PortfolioID(value)
 
 
 @enum.unique
@@ -51,9 +48,8 @@ class BuyAndHoldBot(TradingBotABC):
     A bot that simply buys and holds shares periodically.
     """
 
-    def __init__(self, initial_portfolio: Portfolio, git_hash: str = 'infer',
-                 buy_period: BuyPeriod = BuyPeriod.MONTHLY):
-        super().__init__(initial_portfolio, git_hash)
+    def __init__(self, broker: Broker, buy_period: BuyPeriod = BuyPeriod.MONTHLY):
+        super().__init__(broker)
 
         assert buy_period in BuyPeriod, f'buy_period must be one of: {[period.name for period in BuyPeriod]}'
 
@@ -83,13 +79,12 @@ class BuyAndHoldBot(TradingBotABC):
 
         if should_buy:
             market_price = datum['close']
-            quantity = int((self.portfolio.balance * 0.01) / market_price)
+            balance = self._broker.get_balance(self.portfolio_id)
+            quantity = int((balance * 0.01) / market_price)
 
             if quantity > 0:
-                position = Position(ticker, market_price, quantity=quantity)
-
                 try:
-                    self.portfolio.open(position)
+                    self._broker.execute_buy_order(ticker, quantity, today, self.portfolio_id)
                     self.prev_purchase_date = today
                     print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
                 except InsufficientFundsError:
@@ -110,21 +105,20 @@ class MACDBot(TradingBotABC):
         MACD information.
         :param prev_datum: The data for the given ticker for the previous day.
         """
+        today = datetime.datetime.fromisoformat(datum["datetime"])
         ticker_prefix = f'[{ticker}]'
-        log_prefix = f'[{datum["datetime"]}] {ticker_prefix:6s}'
+        log_prefix = f'[{today}] {ticker_prefix:6s}'
 
         if prev_datum and datum['macd_histogram'] > 0 and datum['macd_line'] > datum['signal_line'] and \
                 prev_datum['macd_line'] <= prev_datum['signal_line']:
             market_price = datum['close']
+            balance = self._broker.get_balance(self.portfolio_id)
+            quantity: int = int((0.01 * balance) // market_price)
 
-            if datum['macd_line'] < 0 and self.portfolio.balance >= market_price:
-                quantity: int = (0.01 * self.portfolio.balance) // market_price
+            if datum['macd_line'] < 0 and quantity > 0:
+                self._broker.execute_buy_order(ticker, quantity, today, self.portfolio_id)
 
-                if quantity > 0:
-                    position = Position(ticker, market_price, quantity)
-                    self.portfolio.open(position)
-
-                    print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
+                print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
         elif prev_datum and datum['macd_histogram'] < 0 and datum['macd_line'] < datum['signal_line'] and \
                 prev_datum['macd_line'] >= prev_datum['signal_line']:
             if datum['macd_line'] > 0:
@@ -136,9 +130,9 @@ class MACDBot(TradingBotABC):
                 total_cost: float = 0.0
                 total_exit_value: float = 0.0
 
-                for position in self.portfolio.open_positions:
-                    if position.ticker == ticker and position.entry_price < market_price:
-                        self.portfolio.close(position, market_price)
+                for position in self._broker.get_open_positions(self.portfolio_id):
+                    if position.ticker == ticker and position.current_value(market_price) > position.entry_value:
+                        self._broker.close_position(position, today)
 
                         net_pl += position.pl_realised
                         total_cost += position.cost

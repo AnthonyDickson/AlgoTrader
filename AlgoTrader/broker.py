@@ -1,8 +1,9 @@
 import datetime
 import enum
 import sqlite3
+import sys
 from collections import defaultdict
-from typing import Dict, List, DefaultDict, Optional
+from typing import Dict, List, DefaultDict, Optional, Union
 
 from AlgoTrader.portfolio import Portfolio
 from AlgoTrader.position import Position
@@ -96,7 +97,8 @@ class Broker:
         return list(filter(lambda position: position.id_in_database in open_position_ids,
                            self.portfolios[portfolio_id].positions))
 
-    def execute_buy_order(self, ticker: Ticker, quantity: int, timestamp: datetime.datetime, portfolio_id: PortfolioID):
+    def execute_buy_order(self, ticker: Ticker, quantity: int, timestamp: datetime.datetime, portfolio_id: PortfolioID,
+                          price: Union[str, float] = 'market_price'):
         """
         Execute a buy order at the market price.
 
@@ -104,19 +106,22 @@ class Broker:
         :param quantity: How many shares to buy.
         :param timestamp: When the buy order was placed.
         :param portfolio_id: The portfolio to add the new position to.
+        :param price: The price to but into the position at. By default, this is set to the current market price.
         """
-        self.database_cursor.execute('''
-                SELECT close
-                FROM daily_stock_data
-                WHERE ticker=? and datetime=?
-                ''', (ticker, timestamp,))
+        if price == 'market_price':
+            self.database_cursor.execute('''
+                    SELECT close
+                    FROM daily_stock_data
+                    WHERE ticker=? and datetime=?
+                    ''', (ticker, timestamp,))
 
-        market_price = self.database_cursor.fetchone()['close']
+            price = self.database_cursor.fetchone()['close']
+        else:
+            price = float(price)
 
-        position = Position(portfolio_id, ticker, market_price, quantity)
-        position.register(self.database_cursor)
+        position = Position(portfolio_id, ticker, price, quantity, self.database_cursor.connection)
 
-        self._execute_transaction(portfolio_id, TransactionType.BUY, quantity, market_price, self.today,
+        self._execute_transaction(portfolio_id, TransactionType.BUY, quantity, price, self.today,
                                   position.id_in_database)
 
         portfolio = self.portfolios[portfolio_id]
@@ -125,25 +130,30 @@ class Broker:
         self.positions_by_portfolio[portfolio_id].append(position)
         self.positions_by_ticker[ticker].append(position)
 
-    def close_position(self, position: Position, timestamp: datetime.datetime):
+    def close_position(self, position: Position, timestamp: datetime.datetime,
+                       price: Union[str, float] = 'market_price'):
         """
         Close a position.
 
         :param position: The position to close.
         :param timestamp: The date and time at which the position was requested to be closed.
+        :param price: The price to close out the position at. By default, this is set to the current market price.
         """
-        self.database_cursor.execute('''
-                        SELECT close
-                        FROM daily_stock_data
-                        WHERE ticker=? and datetime=?
-                        ''', (position.ticker, timestamp,))
+        if price == 'market_price':
+            self.database_cursor.execute('''
+                            SELECT close
+                            FROM daily_stock_data
+                            WHERE ticker=? and datetime=?
+                            ''', (position.ticker, timestamp,))
 
-        market_price = self.database_cursor.fetchone()['close']
+            price = self.database_cursor.fetchone()['close']
+        else:
+            price = float(price)
 
-        self._execute_transaction(position.portfolio_id, TransactionType.SELL, position.quantity, market_price,
+        self._execute_transaction(position.portfolio_id, TransactionType.SELL, position.quantity, price,
                                   self.today, position.id_in_database)
         portfolio = self.portfolios[position.portfolio_id]
-        portfolio.close(position, market_price)
+        portfolio.close(position, price)
 
     def update(self, now: datetime.datetime):
         """
@@ -170,17 +180,22 @@ class Broker:
                                               row['dividend_amount'], self.today, position.id_in_database)
                     total_dividend = position.adjust_for_dividend(row['dividend_amount'])
                     self.portfolios[position.portfolio_id].pay(total_dividend)
-            elif row['split_coefficient'] > 0:
+            elif abs(row['split_coefficient'] - 1) > sys.float_info.epsilon:  # roughly equal to
                 for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]):
-                    whole_shares, fractional_shares, cash_settlement_amount = \
-                        position.adjust_for_stock_split(row['open'], row['split_coefficient'])
+                    whole_shares, fractional_shares, adjusted_price, cash_settlement_amount = \
+                        position.adjust_for_stock_split(row['split_coefficient'])
 
                     if cash_settlement_amount > 0:
                         self._execute_transaction(position.portfolio_id, TransactionType.CASH_SETTLEMENT, 1,
                                                   cash_settlement_amount, self.today, position.id_in_database)
-                    if whole_shares == 0:
-                        self._execute_transaction(position.portfolio_id, TransactionType.SELL, 0, row['open'],
-                                                  self.today, position.id_in_database)
+
+                    if whole_shares < 1:
+                        self.close_position(position, self.today, price=0)
+                    else:
+                        self.close_position(position, self.today, price=position.entry_price)
+                        self.execute_buy_order(position.ticker, int(whole_shares), self.today, position.portfolio_id,
+                                               adjusted_price)
+
                     self.portfolios[position.portfolio_id].pay(cash_settlement_amount)
 
     def _execute_transaction(self, portfolio_id: PortfolioID, transaction_type: TransactionType, quantity: int,

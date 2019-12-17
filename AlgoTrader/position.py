@@ -8,7 +8,8 @@ from AlgoTrader.types import PortfolioID, Ticker
 # TODO: Use database data to calculate stats.
 class Position:
 
-    def __init__(self, portfolio_id: PortfolioID, ticker: Ticker, entry_price: float, quantity: int = 1):
+    def __init__(self, portfolio_id: PortfolioID, ticker: Ticker, entry_price: float, quantity: int,
+                 db_connection: sqlite3.Connection):
         """
         Enter a new position (buy an amount of a security).
 
@@ -16,6 +17,7 @@ class Position:
         :param ticker: The ticker of the security that is being bought.
         :param entry_price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
+        :param db_connection: A connection to a database that can be queried for data on positions.
         """
         assert quantity >= 1, 'Cannot open a position with less than one share.'
 
@@ -32,23 +34,24 @@ class Position:
 
         self.id_in_database: Optional[int] = None
 
-    def register(self, db_cursor: sqlite3.Cursor):
-        """
-        Register this position with the database.
+        self.db_cursor = db_connection.cursor()
+        self.db_cursor.execute('''
+                INSERT INTO position (portfolio_id, ticker)
+                 VALUES (
+                    (SELECT id FROM portfolio WHERE hash=?), 
+                    ?
+                )
+                ''', (self.portfolio_id, self.ticker,))
 
-        :param db_cursor: The cursor that can be used to access the database and add a position.
-        """
-        db_cursor.execute('''
-        INSERT INTO position (portfolio_id, ticker)
-         VALUES (
-            (SELECT id FROM portfolio WHERE hash=?), 
-            ?
-        )
-        ''', (self.portfolio_id, self.ticker,))
+        self.id_in_database = self.db_cursor.lastrowid
 
-        self.id_in_database = db_cursor.lastrowid
+        self.db_cursor.connection.commit()
 
-        db_cursor.connection.commit()
+    def __del__(self):
+        try:
+            self.db_cursor.close()
+        except sqlite3.ProgrammingError:
+            pass
 
     @property
     def portfolio_id(self) -> PortfolioID:
@@ -154,34 +157,26 @@ class Position:
 
     # TODO: Write unit tests for this...
 
-    def adjust_for_stock_split(self, market_price: float, split_coefficient: float) -> Tuple[float, float, float]:
+    def adjust_for_stock_split(self, split_coefficient: float) -> Tuple[float, float, float, float]:
         """
         Adjust this position for a stock split.
 
         Note:
-        - May close the position if it ends up with zero whole shares.
         - If a split results in a position with a fractional share, the fractional share is compensated with a cash
           settlement of equal value.
 
-        :param market_price: The post-split price of the security.
         :param split_coefficient: The ratio of shares each pre-split share is now worth.
-        :return: A 3-tuple containing: number of whole shares, amount of fractional shares and cash settlement amount
-        (this may be zero).
+        :return: A 3-tuple containing: number of whole shares, amount of fractional shares, the adjusted share price
+        and cash settlement amount (this may be zero).
         """
         assert not self.is_closed, 'Cannot adjust a closed position for stock split.'
 
         whole_shares, fractional_shares = divmod(self.quantity * split_coefficient, 1.0)
-
-        # divmod returns a float for the quotient, so we need to explicitly cast back into an int here
-        self._quantity = int(whole_shares)
-
-        cash_settlement_amount = fractional_shares * market_price
+        adjusted_price = self.entry_price / split_coefficient
+        cash_settlement_amount = fractional_shares * adjusted_price
         self._cash_settlements_received += cash_settlement_amount
 
-        if whole_shares < 1:
-            self.close(market_price)
-
-        return whole_shares, fractional_shares, cash_settlement_amount
+        return whole_shares, fractional_shares, adjusted_price, cash_settlement_amount
 
     def close(self, price: float):
         """

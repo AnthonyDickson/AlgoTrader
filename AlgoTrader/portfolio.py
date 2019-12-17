@@ -146,9 +146,11 @@ class Portfolio:
         """
         if amount < 0:
             raise ValueError(f'Cannot add negative amount {amount} to balance.')
-
-        self._balance += amount
-        self.should_fetch_new_balance = True
+        elif amount == 0:
+            return
+        else:
+            self._balance += amount
+            self.should_fetch_new_balance = True
 
 
 # TODO: Update to use data from database.

@@ -1,11 +1,22 @@
 import datetime
+import enum
 import sqlite3
 from collections import defaultdict
-from typing import Dict, List, DefaultDict
+from typing import Dict, List, DefaultDict, Optional
 
 from AlgoTrader.portfolio import Portfolio
 from AlgoTrader.position import Position
 from AlgoTrader.types import PortfolioID, Ticker
+
+
+# TODO: Grab these from the server.
+class TransactionType(enum.Enum):
+    DEPOSIT = enum.auto()
+    WITHDRAWAL = enum.auto()
+    BUY = enum.auto()
+    SELL = enum.auto()
+    DIVIDEND = enum.auto()
+    CASH_SETTLEMENT = enum.auto()
 
 
 # TODO: Adjust for stock splits.
@@ -18,6 +29,7 @@ class Broker:
 
         :param database_connection: A connection to a database that can be queried for stock price data.
         """
+        self.today = datetime.datetime.fromtimestamp(0.0)
         self.database_cursor = database_connection.cursor()
         # TODO: Read portfolios and positions from database?
         self.portfolios: Dict[PortfolioID, Portfolio] = dict()
@@ -25,7 +37,10 @@ class Broker:
         self.positions_by_ticker: DefaultDict[Ticker, List[Position]] = defaultdict(lambda: [])
 
     def __del__(self):
-        self.database_cursor.close()
+        try:
+            self.database_cursor.close()
+        except sqlite3.ProgrammingError:
+            pass
 
     def create_portfolio(self, owner_name: str, initial_contribution: float = 0.00) -> PortfolioID:
         """
@@ -35,8 +50,10 @@ class Broker:
         :param initial_contribution: How much cash the portfolio should start with.
         :return: The ID of the created portfolio.
         """
-        portfolio = Portfolio(owner_name, initial_contribution)
+        portfolio = Portfolio(owner_name, self.database_cursor.connection)
         self.portfolios[portfolio.id] = portfolio
+
+        self._execute_transaction(portfolio.id, TransactionType.DEPOSIT, 1, initial_contribution, self.today)
 
         return portfolio.id
 
@@ -47,6 +64,8 @@ class Broker:
         :param amount: The amount of cash to add.
         :param portfolio_id: The portfolio to add the cash to.
         """
+        self._execute_transaction(portfolio_id, TransactionType.DEPOSIT, 1, amount, self.today)
+
         self.portfolios[portfolio_id].add_contribution(amount)
 
     def get_balance(self, portfolio_id: PortfolioID) -> float:
@@ -65,9 +84,17 @@ class Broker:
         :param portfolio_id: The portfolio to check for open positions.
         :return: A list of open positions.
         """
-        portfolio = self.portfolios[portfolio_id]
+        portfolio_id_in_database = self.portfolios[portfolio_id].id_in_database
 
-        return portfolio.open_positions
+        self.database_cursor.execute(
+            '''SELECT position_id FROM open_positions WHERE portfolio_id = ?''',
+            (portfolio_id_in_database,)
+        )
+
+        open_position_ids = {row['position_id'] for row in self.database_cursor}
+
+        return list(filter(lambda position: position.id_in_database in open_position_ids,
+                           self.portfolios[portfolio_id].positions))
 
     def execute_buy_order(self, ticker: Ticker, quantity: int, timestamp: datetime.datetime, portfolio_id: PortfolioID):
         """
@@ -82,11 +109,16 @@ class Broker:
                 SELECT close
                 FROM daily_stock_data
                 WHERE ticker=? and datetime=?
-                ''', (ticker, timestamp.isoformat(),))
+                ''', (ticker, timestamp,))
 
         market_price = self.database_cursor.fetchone()['close']
 
         position = Position(portfolio_id, ticker, market_price, quantity)
+        position.register(self.database_cursor)
+
+        self._execute_transaction(portfolio_id, TransactionType.BUY, quantity, market_price, self.today,
+                                  position.id_in_database)
+
         portfolio = self.portfolios[portfolio_id]
         portfolio.open(position)
 
@@ -104,9 +136,12 @@ class Broker:
                         SELECT close
                         FROM daily_stock_data
                         WHERE ticker=? and datetime=?
-                        ''', (position.ticker, timestamp.isoformat(),))
+                        ''', (position.ticker, timestamp,))
 
         market_price = self.database_cursor.fetchone()['close']
+
+        self._execute_transaction(position.portfolio_id, TransactionType.SELL, position.quantity, market_price,
+                                  self.today, position.id_in_database)
         portfolio = self.portfolios[position.portfolio_id]
         portfolio.close(position, market_price)
 
@@ -123,18 +158,44 @@ class Broker:
         SELECT ticker, dividend_amount, split_coefficient, open 
         FROM daily_stock_data
         WHERE datetime=? AND (dividend_amount > 0 OR split_coefficient > 0);
-        ''', (now.isoformat(),))
+        ''', (now,))
+
+        self.today = now
 
         for row in self.database_cursor:
             if row['dividend_amount'] > 0:
                 # TODO: Only pay dividend for shares that were owned on the ex-dividend date.
                 for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]):
+                    self._execute_transaction(position.portfolio_id, TransactionType.DIVIDEND, position.quantity,
+                                              row['dividend_amount'], self.today, position.id_in_database)
                     total_dividend = position.adjust_for_dividend(row['dividend_amount'])
                     self.portfolios[position.portfolio_id].pay(total_dividend)
             elif row['split_coefficient'] > 0:
                 for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]):
-                    cash_settlement_amount = position.adjust_for_stock_split(row['open'], row['split_coefficient'])
+                    whole_shares, fractional_shares, cash_settlement_amount = \
+                        position.adjust_for_stock_split(row['open'], row['split_coefficient'])
+
+                    if cash_settlement_amount > 0:
+                        self._execute_transaction(position.portfolio_id, TransactionType.CASH_SETTLEMENT, 1,
+                                                  cash_settlement_amount, self.today, position.id_in_database)
+                    if whole_shares == 0:
+                        self._execute_transaction(position.portfolio_id, TransactionType.SELL, 0, row['open'],
+                                                  self.today, position.id_in_database)
                     self.portfolios[position.portfolio_id].pay(cash_settlement_amount)
+
+    def _execute_transaction(self, portfolio_id: PortfolioID, transaction_type: TransactionType, quantity: int,
+                             value: float, timestamp: datetime.datetime, position_id: Optional[int] = None):
+        portfolio_id_in_database = self.portfolios[portfolio_id].id_in_database
+
+        self.database_cursor.execute(
+            '''
+            INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
+                VALUES (?, ?, (SELECT transaction_type.id FROM transaction_type WHERE name=?), ?, ?, ?)
+            ''',
+            (portfolio_id_in_database, position_id, transaction_type.name, quantity, value, timestamp)
+        )
+
+        self.database_cursor.connection.commit()
 
     def print_report(self, portfolio_id: PortfolioID, date: datetime.datetime):
         """
@@ -155,7 +216,7 @@ class Broker:
             SELECT ticker, close
             FROM daily_stock_data
             WHERE datetime=? AND ticker IN ({ticker_placeholders});
-            ''', (date.isoformat(), *tuple(tickers)))
+            ''', (date, *tuple(tickers)))
 
             stock_data = {row['ticker']: row['close'] for row in self.database_cursor.fetchall()}
 

@@ -80,7 +80,7 @@ def gen_rows(stock_price_data, macd_data, from_date):
 
         yield (
             ticker,
-            datetime.datetime.fromisoformat(date).isoformat(),  # Normalise dates to include time (defaults to midnight)
+            datetime.datetime.fromisoformat(date),  # Normalise dates to include time (defaults to midnight)
             stock_price_datum['1. open'],
             stock_price_datum['2. high'],
             stock_price_datum['3. low'],
@@ -129,35 +129,17 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
     db_cursor = db_connection.cursor()
 
     if not append:
-        db_cursor.executescript('''        
-        DROP TABLE IF EXISTS "daily_stock_data";
-        DROP INDEX IF EXISTS "daily_stock_data_ticker_index";
-        DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
-        DROP TABLE IF EXISTS "portfolio";
-        DROP TABLE IF EXISTS "position";
-        DROP TABLE IF EXISTS "bots";
-        ''')
+        with open(config['DATABASE_NUKE_SCRIPT'], 'r') as file:
+            db_cursor.executescript(file.read())
 
     with open(config['DATABASE_CREATE_SCRIPT'], 'r') as file:
-        create_db_sql = file.read()
-
-    db_cursor.executescript(create_db_sql)
+        db_cursor.executescript(file.read())
 
     batch_start = time.time()
     num_requests_for_batch = 0
     num_tickers_processed = 0
 
     for ticker in tickers:
-        # TODO: Either remove this or add flag enable this feature.
-        #  Perhaps should not skip tickers that already in the database so that we can update the database with new
-        #  daily data.
-        if append:
-            db_cursor.execute('SELECT COUNT(ticker) FROM daily_stock_data WHERE ticker = ?', (ticker,))
-
-            if db_cursor.fetchone()[0] > 0:
-                log(f'Skipping {ticker} - already in database.')
-                continue
-
         ticker_start = time.time()
 
         stock_price_payload = {

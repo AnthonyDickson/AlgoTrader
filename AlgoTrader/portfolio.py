@@ -1,4 +1,6 @@
 import hashlib
+import sqlite3
+import time
 from typing import List, Set, Dict, Optional
 
 from AlgoTrader.exceptions import InsufficientFundsError
@@ -6,19 +8,37 @@ from AlgoTrader.position import Position
 from AlgoTrader.types import PortfolioID, Ticker
 
 
+# TODO: Sync state with database.
 class Portfolio:
-    _next_id = 0
 
-    def __init__(self, owner_name: str, initial_contribution: float = 0.00):
-        self._balance: float = initial_contribution
-        self._contribution: float = initial_contribution
+    def __init__(self, owner_name: str, db_connection: sqlite3.Connection):
+        self.total_cash_settlements: float = 0.0
+        self.total_dividends: float = 0.0
+        self._balance: float = 0.0
+        self._contribution: float = 0.0
 
         self._positions: List[Position] = []
         self._tickers: Set[Ticker] = set()
 
         self._owner_name = owner_name
-        self._id: PortfolioID = hashlib.sha1(bytes(Portfolio._next_id)).hexdigest()
-        Portfolio._next_id += 1
+        self._id: PortfolioID = hashlib.sha1(bytes(int(time.time()))).hexdigest()
+
+        self.db_cursor = db_connection.cursor()
+        self.db_cursor.execute('''
+                INSERT INTO portfolio (hash, owner_name) VALUES (?, ?)
+                ''', (self.id, self._owner_name,))
+
+        self.id_in_database: int = self.db_cursor.lastrowid
+
+        self.db_cursor.connection.commit()
+
+        self.should_fetch_new_balance = True
+
+    def __del__(self):
+        try:
+            self.db_cursor.close()
+        except sqlite3.ProgrammingError:
+            pass
 
     @property
     def id(self) -> PortfolioID:
@@ -40,6 +60,16 @@ class Portfolio:
     @property
     def balance(self) -> float:
         """The available amount of cash."""
+        if self.should_fetch_new_balance:
+            self.db_cursor.execute(
+                '''SELECT balance FROM portfolio_summary WHERE portfolio_id = ?''',
+                (self.id_in_database,)
+            )
+
+            self.should_fetch_new_balance = False
+
+            self._balance = self.db_cursor.fetchone()['balance']
+
         return self._balance
 
     @property
@@ -70,6 +100,7 @@ class Portfolio:
         self._positions.append(position)
         self._tickers.add(position.ticker)
         position.portfolio = self
+        self.should_fetch_new_balance = True
 
     def close(self, position: Position, price: float):
         """
@@ -82,6 +113,7 @@ class Portfolio:
 
         position.close(price)
         self._balance += position.exit_value
+        self.should_fetch_new_balance = True
 
     def print_summary(self, stock_prices: Dict[Ticker, float], ticker: Optional[Ticker] = None):
         """
@@ -116,8 +148,11 @@ class Portfolio:
             raise ValueError(f'Cannot add negative amount {amount} to balance.')
 
         self._balance += amount
+        self.should_fetch_new_balance = True
 
 
+# TODO: Update to use data from database.
+# TODO: Updload reports to database.
 class TickerPositionSummary:
     """Summary report for all positions for a given ticker."""
 
@@ -136,6 +171,8 @@ class TickerPositionSummary:
             filter(lambda position: position.is_closed and position.ticker == ticker, portfolio.positions)
         )
 
+        positions = open_positions + closed_positions
+
         self.ticker = ticker
 
         self.total_num_open_positions = len(open_positions)
@@ -148,12 +185,17 @@ class TickerPositionSummary:
             sum(position.exit_value for position in closed_positions)
         self.total_position_value = self.total_open_position_value + self.total_closed_position_value
 
+        self.total_dividends_received = sum(position.dividends_received for position in positions)
+        self.total_cash_settlements_received = sum(position.cash_settlements_received for position in positions)
+        self.total_adjustments = self.total_dividends_received + self.total_cash_settlements_received
+
         self.total_open_position_cost = sum(position.cost for position in open_positions)
         self.total_closed_position_cost = sum(position.cost for position in closed_positions)
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
 
         self.realised_pl = sum(position.pl_realised for position in closed_positions)
-        self.unrealised_pl = sum(position.pl_unrealised(stock_price) for position in open_positions)
+        self.unrealised_pl = \
+            sum(position.pl_unrealised(stock_price) + position.adjustments for position in open_positions)
         self.net_pl = self.realised_pl + self.unrealised_pl
 
         try:
@@ -167,9 +209,15 @@ class TickerPositionSummary:
         return (
             f'{ticker_prefix:6s} P/L: {self.net_pl_percentage:.2f}% '
             f'({self.net_pl:.2f}) ({self.realised_pl:.2f} realised, {self.unrealised_pl:.2f} unrealised)'
+            f' - Adjustments: {self.total_adjustments:.2f} '
+            f'({self.total_dividends_received:.2f} from dividends, '
+            f'{self.total_cash_settlements_received:.2f} from cash settlements)'
         )
 
 
+# TODO: Update to use data from database.
+# TODO: Calculate unrealised and net p&L using transaction data.
+# TODO: Upload reports to database.
 # TODO: Include YoY P&L
 class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
@@ -221,8 +269,12 @@ class PortfolioSummary:
 
         self.total_open_position_value: float = 0.0
         self.total_closed_position_value: float = 0.0
+
         self.total_open_position_cost: float = 0.0
         self.total_closed_position_cost: float = 0.0
+
+        self.total_dividends: float = 0.0
+        self.total_cash_settlements: float = 0.0
 
         for ticker in portfolio.tickers:
             try:
@@ -230,8 +282,12 @@ class PortfolioSummary:
 
                 self.total_open_position_value += ticker_position_summary.total_open_position_value
                 self.total_closed_position_value += ticker_position_summary.total_closed_position_value
+
                 self.total_open_position_cost += ticker_position_summary.total_open_position_cost
                 self.total_closed_position_cost += ticker_position_summary.total_closed_position_cost
+
+                self.total_dividends += ticker_position_summary.total_dividends_received
+                self.total_cash_settlements += ticker_position_summary.total_cash_settlements_received
             except KeyError:
                 print(f'WARNING: Missing stock prices for {ticker}.')
 
@@ -270,12 +326,11 @@ class PortfolioSummary:
         result += 'Portfolio Summary\n'
         result += '#' * 80 + '\n'
 
-        result += '#' * 40 + '\n'
-        result += 'Portfolio Valuation\n'
-        result += '#' * 40 + '\n'
-
         result += f'Equity: {self.equity:.2f}\n'
         result += f'Total Contribution: {self.contribution:.2f}\n'
+        result += (f'Total Adjustments: {self.total_dividends + self.total_cash_settlements:.2f} '
+                   f'({self.total_dividends:.2f} from dividends, '
+                   f'{self.total_cash_settlements:.2f} from cash settlements)\n')
         result += f'Balance: {self.balance:.2f}\n'
         result += f'Net P&L: {self.net_pl:.2f} ({self.net_pl_percentage:.2f}%)\n'
         result += f'Realised P&L: {self.net_realised_pl:.2f} ({self.net_realised_pl_percentage:.2f}%)\n'
@@ -300,12 +355,5 @@ class PortfolioSummary:
                        f'{self.most_frequently_traded.total_num_positions} positions '
                        f'({self.most_frequently_traded.total_num_open_positions} open, '
                        f'{self.most_frequently_traded.total_num_closed_positions} closed)\n')
-
-        result += '#' * 40 + '\n'
-        result += 'Position Summary by Ticker\n'
-        result += '#' * 40 + '\n'
-
-        for ticker in sorted(self.ticker_position_summaries.keys()):
-            result += f'{self.ticker_position_summaries[ticker]}\n'
 
         return result

@@ -1,7 +1,13 @@
+import sqlite3
+from typing import Optional, Tuple
+
 from AlgoTrader.types import PortfolioID, Ticker
 
 
+# TODO: Sync state with database.
+# TODO: Use database data to calculate stats.
 class Position:
+
     def __init__(self, portfolio_id: PortfolioID, ticker: Ticker, entry_price: float, quantity: int = 1):
         """
         Enter a new position (buy an amount of a security).
@@ -18,10 +24,31 @@ class Position:
         self._quantity: int = quantity
         self._entry_price: float = entry_price
         self._exit_price: float = 0.0
-        self._adjustments: float = 0.0
+        self._dividends_received = 0.00
+        self._cash_settlements_received = 0.00
         self._pl_realised: float = 0.0
         self._pl_unrealised: float = 0.0
         self._is_closed: bool = False
+
+        self.id_in_database: Optional[int] = None
+
+    def register(self, db_cursor: sqlite3.Cursor):
+        """
+        Register this position with the database.
+
+        :param db_cursor: The cursor that can be used to access the database and add a position.
+        """
+        db_cursor.execute('''
+        INSERT INTO position (portfolio_id, ticker)
+         VALUES (
+            (SELECT id FROM portfolio WHERE hash=?), 
+            ?
+        )
+        ''', (self.portfolio_id, self.ticker,))
+
+        self.id_in_database = db_cursor.lastrowid
+
+        db_cursor.connection.commit()
 
     @property
     def portfolio_id(self) -> PortfolioID:
@@ -40,23 +67,6 @@ class Position:
         return self._is_closed
 
     @property
-    def entry_value(self) -> float:
-        """The value of the position when it was opened."""
-        return self._quantity * self._entry_price
-
-    @property
-    def exit_value(self) -> float:
-        """The value of the position when it was closed."""
-        assert self.is_closed, 'Cannot get the exit value of a position that is still open.'
-
-        return self.quantity * self._exit_price + self._adjustments
-
-    @property
-    def cost(self) -> float:
-        """How much the position cost to open."""
-        return self.entry_value
-
-    @property
     def entry_price(self) -> float:
         """The price per share when the position was opened."""
         return self._entry_price
@@ -67,12 +77,41 @@ class Position:
         return self._quantity
 
     @property
+    def entry_value(self) -> float:
+        """The value of the position when it was opened."""
+        return self._quantity * self._entry_price
+
+    @property
+    def cost(self) -> float:
+        """How much the position cost to open."""
+        return self.entry_value
+
+    @property
+    def exit_value(self) -> float:
+        """The value of the position when it was closed."""
+        assert self.is_closed, 'Cannot get the exit value of a position that is still open.'
+
+        return self.quantity * self._exit_price
+
+    @property
+    def dividends_received(self) -> float:
+        """How much this position has earned in dividends."""
+        return self._dividends_received
+
+    @property
+    def cash_settlements_received(self) -> float:
+        """How much this position has received in cash settlements."""
+        return self._cash_settlements_received
+
+    @property
+    def adjustments(self) -> float:
+        """How much this position has received in dividends and cash settlements."""
+        return self.dividends_received + self.cash_settlements_received
+
+    @property
     def pl_realised(self) -> float:
         """The realised profit and loss of the position."""
-        assert self.is_closed is True, \
-            'Cannot get the realised P&L of a position that is sill open. Use `pl_unrealised(current_price) instead.'
-
-        return self._pl_realised + self._adjustments
+        return self._pl_realised + self.adjustments
 
     def pl_unrealised(self, current_price) -> float:
         """
@@ -97,7 +136,7 @@ class Position:
         """
         assert self.is_closed is False, 'Cannot check current value on a closed position, use `exit_value` instead.'
 
-        return self.quantity * current_price + self._adjustments
+        return self.quantity * current_price
 
     def adjust_for_dividend(self, dividend_per_share: float):
         """
@@ -109,12 +148,13 @@ class Position:
         assert dividend_per_share > 0, f'Cannot pay a non-positive dividend of {dividend_per_share}.'
 
         total_dividend_amount = self.quantity * dividend_per_share
-        self._adjustments += total_dividend_amount
+        self._dividends_received += total_dividend_amount
 
         return total_dividend_amount
 
     # TODO: Write unit tests for this...
-    def adjust_for_stock_split(self, market_price: float, split_coefficient: float) -> float:
+
+    def adjust_for_stock_split(self, market_price: float, split_coefficient: float) -> Tuple[float, float, float]:
         """
         Adjust this position for a stock split.
 
@@ -125,26 +165,23 @@ class Position:
 
         :param market_price: The post-split price of the security.
         :param split_coefficient: The ratio of shares each pre-split share is now worth.
-        :return: The cash settlement amount (may be zero).
+        :return: A 3-tuple containing: number of whole shares, amount of fractional shares and cash settlement amount
+        (this may be zero).
         """
         assert not self.is_closed, 'Cannot adjust a closed position for stock split.'
 
-        whole_quantity, fractional_quantity = divmod(self.quantity * split_coefficient, 1.0)
+        whole_shares, fractional_shares = divmod(self.quantity * split_coefficient, 1.0)
 
         # divmod returns a float for the quotient, so we need to explicitly cast back into an int here
-        self._quantity = int(whole_quantity)
+        self._quantity = int(whole_shares)
 
-        try:
-            cash_settlement_amount = fractional_quantity * market_price
-        except ZeroDivisionError:
-            cash_settlement_amount = 0.00
+        cash_settlement_amount = fractional_shares * market_price
+        self._cash_settlements_received += cash_settlement_amount
 
-        self._adjustments += cash_settlement_amount
-
-        if whole_quantity < 1:
+        if whole_shares < 1:
             self.close(market_price)
 
-        return cash_settlement_amount
+        return whole_shares, fractional_shares, cash_settlement_amount
 
     def close(self, price: float):
         """

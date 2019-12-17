@@ -7,7 +7,8 @@ from AlgoTrader.interfaces import ITradingBot
 from AlgoTrader.types import Ticker
 
 
-def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], yearly_contribution: float,
+def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], initial_contribution: float,
+              yearly_contribution: float,
               db_connection: sqlite3.Connection,
               fetch_data_fn: Callable[[datetime.datetime, sqlite3.Cursor], Dict[Ticker, Dict[str, Any]]]):
     """
@@ -16,6 +17,7 @@ def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], yearly_con
     :param bot: The bot to test.
     :param broker: The broker that will facilitate trades.
     :param tickers: The tickers that the bot should buy and sell.
+    :param initial_contribution: How much cash the bot starts with in its portfolio.
     :param yearly_contribution: How much cash gets added to the bot's portfolio at the start of each year.
     :param db_connection: A connection to a database that can be queried for daily stock data.
     :param fetch_data_fn: The function that fetches the data for a given day.
@@ -27,6 +29,9 @@ def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], yearly_con
 
     yesterday = datetime.datetime.fromisoformat(dates[0])
     yesterdays_data = fetch_data_fn(yesterday, db_cursor)
+
+    broker.today = yesterday
+    bot.portfolio_id = broker.create_portfolio(bot.name, initial_contribution)
 
     for i in range(1, len(dates)):
         today = datetime.datetime.fromisoformat(dates[i])

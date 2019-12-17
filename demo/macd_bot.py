@@ -12,7 +12,7 @@ from AlgoTrader.utils import main_loop, load_ticker_list
 def fetch_daily_data(date: datetime.datetime, db_cursor):
     db_cursor.execute('SELECT ticker, datetime, close, macd_histogram, macd_line, signal_line '
                       'FROM daily_stock_data '
-                      'WHERE datetime = ?', (date.isoformat(),))
+                      'WHERE datetime = ?', (date,))
 
     yesterdays_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in db_cursor}
 
@@ -39,13 +39,13 @@ def main(ticker_list: str, config_file_path: str = 'config.json',
     db_connection = sqlite3.connect(config['DATABASE_URL'])
     db_connection.row_factory = sqlite3.Row
 
-    broker = Broker(db_connection)
-    bot = MACDBot(broker)
-    bot.portfolio_id = broker.create_portfolio(bot.name, initial_balance)
+    try:
+        broker = Broker(db_connection)
+        bot = MACDBot(broker)
 
-    main_loop(bot, broker, tickers, yearly_contribution, db_connection, fetch_daily_data)
-
-    db_connection.close()
+        main_loop(bot, broker, tickers, initial_balance, yearly_contribution, db_connection, fetch_daily_data)
+    finally:
+        db_connection.close()
 
 
 if __name__ == '__main__':

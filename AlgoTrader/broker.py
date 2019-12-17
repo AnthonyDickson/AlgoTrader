@@ -121,11 +121,11 @@ class Broker:
 
         position = Position(portfolio_id, ticker, price, quantity, self.database_cursor.connection)
 
-        self._execute_transaction(portfolio_id, TransactionType.BUY, quantity, price, self.today,
-                                  position.id_in_database)
-
         portfolio = self.portfolios[portfolio_id]
         portfolio.open(position)
+
+        self._execute_transaction(portfolio_id, TransactionType.BUY, quantity, price, self.today,
+                                  position.id_in_database)
 
         self.positions_by_portfolio[portfolio_id].append(position)
         self.positions_by_ticker[ticker].append(position)
@@ -150,10 +150,11 @@ class Broker:
         else:
             price = float(price)
 
-        self._execute_transaction(position.portfolio_id, TransactionType.SELL, position.quantity, price,
-                                  self.today, position.id_in_database)
         portfolio = self.portfolios[position.portfolio_id]
         portfolio.close(position, price)
+
+        self._execute_transaction(position.portfolio_id, TransactionType.SELL, position.quantity, price,
+                                  self.today, position.id_in_database)
 
     def update(self, now: datetime.datetime):
         """
@@ -181,7 +182,11 @@ class Broker:
                     total_dividend = position.adjust_for_dividend(row['dividend_amount'])
                     self.portfolios[position.portfolio_id].pay(total_dividend)
             elif abs(row['split_coefficient'] - 1) > sys.float_info.epsilon:  # roughly equal to
-                for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]):
+                # Need to make list here to avoid positions being added during stock split which the filter then
+                # iterates up to, splitting that stock again, and again ad infinitum....
+                positions = list(filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]))
+
+                for position in positions:
                     whole_shares, fractional_shares, adjusted_price, cash_settlement_amount = \
                         position.adjust_for_stock_split(row['split_coefficient'])
 
@@ -202,15 +207,14 @@ class Broker:
                              value: float, timestamp: datetime.datetime, position_id: Optional[int] = None):
         portfolio_id_in_database = self.portfolios[portfolio_id].id_in_database
 
-        self.database_cursor.execute(
-            '''
-            INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
-                VALUES (?, ?, (SELECT transaction_type.id FROM transaction_type WHERE name=?), ?, ?, ?)
-            ''',
-            (portfolio_id_in_database, position_id, transaction_type.name, quantity, value, timestamp)
-        )
-
-        self.database_cursor.connection.commit()
+        with self.database_cursor.connection:
+            self.database_cursor.execute(
+                '''
+                INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
+                    VALUES (?, ?, (SELECT transaction_type.id FROM transaction_type WHERE name=?), ?, ?, ?)
+                ''',
+                (portfolio_id_in_database, position_id, transaction_type.name, quantity, value, timestamp)
+            )
 
     def print_report(self, portfolio_id: PortfolioID, date: datetime.datetime):
         """

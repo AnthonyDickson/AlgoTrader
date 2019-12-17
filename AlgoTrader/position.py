@@ -1,5 +1,5 @@
 import sqlite3
-from typing import Optional, Tuple
+from typing import Tuple
 
 from AlgoTrader.types import PortfolioID, Ticker
 
@@ -32,8 +32,6 @@ class Position:
         self._pl_unrealised: float = 0.0
         self._is_closed: bool = False
 
-        self.id_in_database: Optional[int] = None
-
         self.db_cursor = db_connection.cursor()
         self.db_cursor.execute('''
                 INSERT INTO position (portfolio_id, ticker)
@@ -43,7 +41,7 @@ class Position:
                 )
                 ''', (self.portfolio_id, self.ticker,))
 
-        self.id_in_database = self.db_cursor.lastrowid
+        self.id_in_database: int = self.db_cursor.lastrowid
 
         self.db_cursor.connection.commit()
 

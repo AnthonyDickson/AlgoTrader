@@ -129,7 +129,7 @@ SELECT portfolio.id,
        CURRENT_TIMESTAMP,
        (sums.total_in + sums.total_dividends + sums.total_cash_settlements),
        (sums.total_out),
-       (sums.total_in - sums.total_out),
+       (sums.total_in + sums.total_dividends + sums.total_cash_settlements - sums.total_out),
        (
            SELECT IFNULL(COUNT(position_id), 0)
            FROM open_positions
@@ -154,36 +154,37 @@ SELECT portfolio.id,
        (sums.total_dividends + sums.total_cash_settlements)
 FROM portfolio
          INNER JOIN (
-    SELECT inner.id as id,
+    SELECT "inner".id as id,
            (SELECT IFNULL(SUM(quantity * price), 0)
             FROM transactions
-            WHERE transactions.portfolio_id = inner.id
-              AND transactions.type = (SELECT transaction_type.id
-                                       FROM transaction_type
-                                       WHERE transaction_type.name NOT IN ('WITHDRAWAL', 'BUY'))
-           )        AS total_in,
+            WHERE transactions.portfolio_id = "inner".id
+              AND transactions.type IN (SELECT transaction_type.id
+                                        FROM transaction_type
+                                        WHERE transaction_type.name NOT IN ('WITHDRAWAL', 'BUY'))
+           )          AS total_in,
            (SELECT IFNULL(SUM(quantity * price), 0)
             FROM transactions
-            WHERE transactions.portfolio_id = inner.id
-              AND transactions.type = (SELECT transaction_type.id
-                                       FROM transaction_type
-                                       WHERE transaction_type.name IN ('WITHDRAWAL', 'BUY'))
-           )        AS total_out,
+            WHERE transactions.portfolio_id = "inner".id
+              AND transactions.type IN (SELECT transaction_type.id
+                                        FROM transaction_type
+                                        WHERE transaction_type.name IN ('WITHDRAWAL', 'BUY'))
+           )          AS total_out,
            (SELECT IFNULL(SUM(quantity * price), 0)
             FROM transactions
-            WHERE transactions.portfolio_id = inner.id
+            WHERE transactions.portfolio_id = "inner".id
               AND transactions.type = (SELECT transaction_type.id
                                        FROM transaction_type
                                        WHERE transaction_type.name = 'DIVIDEND')
-           )        AS total_dividends,
+           )          AS total_dividends,
            (SELECT IFNULL(SUM(quantity * price), 0)
             FROM transactions
-            WHERE transactions.portfolio_id = inner.id
+            WHERE transactions.portfolio_id = "inner".id
               AND transactions.type = (SELECT transaction_type.id
                                        FROM transaction_type
                                        WHERE transaction_type.name = 'CASH_SETTLEMENT')
-           )        AS total_cash_settlements
-    FROM portfolio AS inner
+           )          AS total_cash_settlements
+    FROM portfolio AS "inner"
+
 ) sums
                     ON sums.id = portfolio.id;
 

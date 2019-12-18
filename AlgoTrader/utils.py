@@ -1,10 +1,81 @@
 import datetime
+import json
 import sqlite3
 from typing import Set
+
+import plac
 
 from AlgoTrader.broker import Broker
 from AlgoTrader.interfaces import ITradingBot
 from AlgoTrader.types import Ticker
+
+
+@plac.annotations(
+    spx_tickers_file=plac.Annotation('The text file containing the current SPX ticker list.'),
+    spx_changes_file=plac.Annotation('The JSON file containing the SPX ticker list diffs.'),
+    spx_output_file=plac.Annotation('The JSON file to write the earliest SPX ticker list to.'),
+    spx_historical_output_file=plac.Annotation('The JSON file to write the historical SPX ticker list data to.'),
+)
+def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
+                                 spx_output_file: str, spx_historical_output_file: str):
+    """
+    Parse SPX ticker lists to produce historical SPX ticker lists.
+    """
+    """
+    :param spx_tickers_file: The text file containing the current SPX ticker list.
+    :param spx_changes_file: The JSON file containing the SPX ticker list diffs.
+    :param spx_output_file: The JSON file to write the earliest SPX ticker list to.
+    :param spx_historical_output_file: The JSON file to write the historical SPX ticker list data to.
+    """
+    spx_tickers_now = load_ticker_list(spx_tickers_file)
+
+    with open(spx_changes_file, 'r') as file:
+        spx_changes = json.load(file)
+
+    latest = str(datetime.datetime.fromisoformat(str(datetime.date.today())))
+
+    spx_tickers_historical = {
+        'tickers': {
+            latest: set(spx_tickers_now)
+        }
+    }
+
+    prev_date = latest
+
+    for date in sorted(spx_changes, reverse=True):
+        date_parts = date.split('-')
+        year, month, day = map(int, date_parts)
+        the_date = datetime.datetime(year, month, day)
+
+        next_ticker_set = spx_tickers_historical['tickers'][prev_date].copy()
+
+        if len(spx_changes[date]['added']['ticker']) > 0:
+            next_ticker_set.difference_update([spx_changes[date]['added']['ticker']])
+
+        if len(spx_changes[date]['removed']['ticker']) > 0:
+            next_ticker_set.update([spx_changes[date]['removed']['ticker']])
+
+        spx_tickers_historical['tickers'][str(the_date)] = set(next_ticker_set)
+        prev_date = str(the_date)
+
+    earliest_spx_date = min(spx_tickers_historical['tickers'])
+
+    earliest_spx_tickers = {
+        'tickers': {
+            # Cast to list since JSON doesn't like sets.
+            earliest_spx_date: list(sorted(spx_tickers_historical['tickers'][earliest_spx_date]))
+        }
+    }
+
+    spx_tickers_historical['tickers'] = {
+        date: list(sorted(spx_tickers_historical['tickers'][date])) for date in spx_tickers_historical['tickers']
+    }
+
+    with open(spx_output_file, 'w') as file:
+        json.dump(earliest_spx_tickers, file)
+
+    with open(spx_historical_output_file, 'w') as file:
+        json.dump(spx_tickers_historical, file)
 
 
 def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yearly_contribution: float,

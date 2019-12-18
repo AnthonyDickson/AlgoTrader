@@ -147,15 +147,15 @@ class Portfolio:
         """
         self._deduct(amount)
 
-    def pay_dividend(self, amount: float, position):
+    def pay_dividend(self, amount: float, position: Position):
         """
         Pay a dividend to this portfolio.
 
-        :param position: The position that the dividen is being paid for.
-        :param amount: The amount to be paid.
+        :param position: The position that the dividend is being paid for.
+        :param amount: The amount to be paid per share.
         """
-        self._pay(amount)
-        position.dividends_received += amount
+        total_dividend_amount = position.adjust_for_dividend(amount)
+        self._pay(total_dividend_amount)
 
     def pay_cash_settlement(self, amount: float, position):
         """
@@ -192,7 +192,7 @@ class Portfolio:
 
 
 # TODO: Update to use data from database.
-# TODO: Updload reports to database.
+# TODO: Upload reports to database.
 class TickerPositionSummary:
     """Summary report for all positions for a given ticker."""
 
@@ -203,39 +203,38 @@ class TickerPositionSummary:
         :param portfolio: The portfolio that contains the positions.
         :param stock_price: The current stock price for the given security.
         """
-        open_positions = list(
-            filter(lambda position: not position.is_closed and position.ticker == ticker, portfolio.positions)
-        )
-
-        closed_positions = list(
-            filter(lambda position: position.is_closed and position.ticker == ticker, portfolio.positions)
-        )
-
-        positions = open_positions + closed_positions
-
         self.ticker = ticker
+        self.total_num_closed_positions: float = 0.0
+        self.total_num_open_positions: float = 0.0
+        self.total_closed_position_cost: float = 0.0
+        self.total_closed_position_value: float = 0.0
+        self.realised_pl: float = 0.0
+        self.total_num_closed_positions: float = 0.0
+        self.total_open_position_cost: float = 0.0
+        self.total_open_position_value: float = 0.0
+        self.unrealised_pl: float = 0.0
+        self.total_dividends_received: float = 0.0
+        self.total_cash_settlements_received: float = 0.0
 
-        self.total_num_open_positions = len(open_positions)
-        self.total_num_closed_positions = len(closed_positions)
+        for position in portfolio.positions:
+            if position.is_closed:
+                self.total_num_closed_positions += 1
+                self.total_closed_position_cost += position.cost
+                self.total_closed_position_value += position.exit_value
+                self.realised_pl += position.realised_pl
+            else:
+                self.total_num_open_positions += 1
+                self.total_open_position_cost += position.cost
+                self.total_open_position_value += position.current_value(stock_price)
+                self.unrealised_pl += position.unrealised_pl(stock_price)
+
+            self.total_dividends_received += position.dividends_received
+            self.total_cash_settlements_received += position.cash_settlements_received
+
         self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
-
-        self.total_open_position_value = \
-            sum(position.current_value(stock_price) for position in open_positions)
-        self.total_closed_position_value = \
-            sum(position.exit_value for position in closed_positions)
-        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
-
-        self.total_dividends_received = sum(position.dividends_received for position in positions)
-        self.total_cash_settlements_received = sum(position.cash_settlements_received for position in positions)
-        self.total_adjustments = self.total_dividends_received + self.total_cash_settlements_received
-
-        self.total_open_position_cost = sum(position.cost for position in open_positions)
-        self.total_closed_position_cost = sum(position.cost for position in closed_positions)
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
-
-        self.realised_pl = sum(position.pl_realised for position in closed_positions)
-        self.unrealised_pl = \
-            sum(position.pl_unrealised(stock_price) + position.adjustments for position in open_positions)
+        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
+        self.total_adjustments = self.total_dividends_received + self.total_cash_settlements_received
         self.net_pl = self.realised_pl + self.unrealised_pl
 
         try:
@@ -268,72 +267,45 @@ class PortfolioSummary:
         :param portfolio: The portfolio to report on.
         :param stock_prices: The current prices of the securities present in the given portfolio.
         """
-
-        self.ticker_position_summaries: Dict[Ticker, TickerPositionSummary] = dict()
-
-        for ticker in portfolio.tickers:
-            try:
-                self.ticker_position_summaries[ticker] = TickerPositionSummary(ticker, portfolio, stock_prices[ticker])
-            except KeyError:
-                print(f'WARNING: Missing stock prices for {ticker}.')
-
-        if len(portfolio.positions) > 0:
-            self.worst_performer_ticker = min(self.ticker_position_summaries,
-                                              key=lambda ticker: self.ticker_position_summaries[
-                                                  ticker].net_pl_percentage)
-            self.worst_performer = self.ticker_position_summaries[self.worst_performer_ticker]
-
-            self.best_performer_ticker = max(self.ticker_position_summaries,
-                                             key=lambda ticker: self.ticker_position_summaries[
-                                                 ticker].net_pl_percentage)
-            self.best_performer = self.ticker_position_summaries[self.best_performer_ticker]
-
-            self.least_frequently_traded_ticker = \
-                min(self.ticker_position_summaries,
-                    key=lambda ticker: self.ticker_position_summaries[ticker].total_num_positions)
-            self.least_frequently_traded = self.ticker_position_summaries[self.least_frequently_traded_ticker]
-
-            self.most_frequently_traded_ticker = \
-                max(self.ticker_position_summaries,
-                    key=lambda ticker: self.ticker_position_summaries[ticker].total_num_positions)
-            self.most_frequently_traded = self.ticker_position_summaries[self.most_frequently_traded_ticker]
-        else:
-            self.worst_performer_ticker = None
-            self.worst_performer = None
-            self.best_performer_ticker = None
-            self.best_performer = None
-            self.least_frequently_traded_ticker = None
-            self.least_frequently_traded = None
-            self.most_frequently_traded_ticker = None
-            self.most_frequently_traded = None
-
-        self.total_open_position_value: float = 0.0
-        self.total_closed_position_value: float = 0.0
-
-        self.total_open_position_cost: float = 0.0
+        # TODO: Track withdrawals amount.
+        self.total_withdrawals: float = 0.0
+        self.total_num_closed_positions: float = 0.0
+        self.total_num_open_positions: float = 0.0
         self.total_closed_position_cost: float = 0.0
+        self.total_closed_position_value: float = 0.0
+        self.realised_pl: float = 0.0
+        self.total_num_closed_positions: float = 0.0
+        self.total_open_position_cost: float = 0.0
+        self.total_open_position_value: float = 0.0
+        self.unrealised_pl: float = 0.0
+        self.total_dividends_received: float = 0.0
+        self.total_cash_settlements_received: float = 0.0
 
-        self.total_dividends: float = 0.0
-        self.total_cash_settlements: float = 0.0
+        for position in portfolio.positions:
+            self.total_dividends_received += position.dividends_received
+            self.total_cash_settlements_received += position.cash_settlements_received
 
-        for ticker in portfolio.tickers:
-            try:
-                ticker_position_summary = self.ticker_position_summaries[ticker]
+            if position.is_closed:
+                self.total_num_closed_positions += 1
+                self.total_closed_position_cost += position.cost
+                self.total_closed_position_value += position.exit_value
+                self.realised_pl += position.realised_pl
+            else:
+                self.total_num_open_positions += 1
+                self.total_open_position_cost += position.cost
 
-                self.total_open_position_value += ticker_position_summary.total_open_position_value
-                self.total_closed_position_value += ticker_position_summary.total_closed_position_value
+                try:
+                    stock_price = stock_prices[position.ticker]
 
-                self.total_open_position_cost += ticker_position_summary.total_open_position_cost
-                self.total_closed_position_cost += ticker_position_summary.total_closed_position_cost
+                    self.total_open_position_value += position.current_value(stock_price)
+                    self.unrealised_pl += position.unrealised_pl(stock_price)
+                except KeyError:
+                    print(f'WARNING: Missing stock prices for {position.ticker}.')
 
-                self.total_dividends += ticker_position_summary.total_dividends_received
-                self.total_cash_settlements += ticker_position_summary.total_cash_settlements_received
-            except KeyError:
-                print(f'WARNING: Missing stock prices for {ticker}.')
-
-        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
+        self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
-
+        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
+        self.total_adjustments = self.total_dividends_received + self.total_cash_settlements_received
         self.net_pl = self.total_position_value - self.total_position_cost
         self.net_realised_pl = self.total_closed_position_value - self.total_closed_position_cost
         self.net_unrealised_pl = self.total_open_position_value - self.total_open_position_cost
@@ -357,7 +329,14 @@ class PortfolioSummary:
 
         self.balance = portfolio.balance
         self.contribution = portfolio.contribution
+        self.net_contribution = self.contribution - self.total_withdrawals
+
         self.equity = self.balance + self.total_open_position_value
+        self.equity_change = (self.equity / self.net_contribution * 100) - 100
+
+        self.revenue = self.total_adjustments + self.total_closed_position_value
+        self.income = self.contribution + self.revenue
+        self.expenses = self.total_withdrawals + self.total_open_position_cost
 
     def __str__(self) -> str:
         result = ''
@@ -366,34 +345,35 @@ class PortfolioSummary:
         result += 'Portfolio Summary\n'
         result += '#' * 80 + '\n'
 
-        result += f'Equity: {self.equity:.2f}\n'
-        result += f'Total Deposits: {self.contribution:.2f}\n'
-        result += (f'Total Adjustments: {self.total_dividends + self.total_cash_settlements:.2f} '
-                   f'({self.total_dividends:.2f} from dividends, '
-                   f'{self.total_cash_settlements:.2f} from cash settlements)\n')
-        result += f'Balance: {self.balance:.2f}\n'
-        result += f'Net P&L: {self.net_pl:.2f} ({self.net_pl_percentage:.2f}%)\n'
-        result += f'Realised P&L: {self.net_realised_pl:.2f} ({self.net_realised_pl_percentage:.2f}%)\n'
-        result += f'Unrealised P&L: {self.net_unrealised_pl:.2f} ({self.net_unrealised_pl_percentage:.2f}%)\n'
+        result += f'Equity: {self.equity:.2f} ({self.format_change(self.equity_change)}%)\n'
+        result += f'\tTotal Open Position(s) Value: {self.total_open_position_value:.2f}\n'
+        result += f'\tBalance: {self.balance:.2f}\n'
+
+        result += f'\t\tIncome: {self.income:.2f}\n'
+        result += f'\t\t\tTotal Deposits: {self.contribution:.2f}\n'
+        result += f'\t\t\tRevenue: {self.revenue:.2f}\n'
+        result += f'\t\t\t\tAdjustments: {self.total_adjustments:.2f}\n'
+        result += f'\t\t\t\t\tDividends: {self.total_dividends_received:.2f}\n'
+        result += f'\t\t\t\t\tCash Settlements: {self.total_cash_settlements_received:.2f}\n'
+        result += f'\t\t\t\tClosed Positions: {self.total_closed_position_value:.2f}\n'
+
+        result += f'\t\tExpenses: ({self.expenses:.2f})\n'
+        result += f'\t\t\tWithdrawals: ({self.total_withdrawals:.2f})\n'
+        result += f'\t\t\tOpen Positions: ({self.total_open_position_cost:.2f})\n'
         result += '\n'
 
-        result += (f'Total Open Position Value/Cost: {self.total_open_position_value:.2f} / '
-                   f'{self.total_open_position_cost:.2f}\n')
-        result += (f'Total Closed Position Value/Cost: {self.total_closed_position_value:.2f} / '
-                   f'{self.total_closed_position_cost:.2f}\n')
-
-        if self.worst_performer_ticker and self.best_performer_ticker and self.most_frequently_traded_ticker:
-            result += (f'Worst Performer P&L: [{self.worst_performer_ticker}] {self.worst_performer.net_pl:.2f} '
-                       f'({self.worst_performer.net_pl_percentage:.2f}%)\n')
-            result += (f'Best Performer P&L:  [{self.best_performer_ticker}] {self.best_performer.net_pl:.2f} '
-                       f'({self.best_performer.net_pl_percentage:.2f}%)\n')
-            result += (f'Least Frequently Traded:  [{self.least_frequently_traded_ticker}] '
-                       f'{self.least_frequently_traded.total_num_positions} positions '
-                       f'({self.least_frequently_traded.total_num_open_positions} open, '
-                       f'{self.least_frequently_traded.total_num_closed_positions} closed)\n')
-            result += (f'Most Frequently Traded:  [{self.most_frequently_traded_ticker}] '
-                       f'{self.most_frequently_traded.total_num_positions} positions '
-                       f'({self.most_frequently_traded.total_num_open_positions} open, '
-                       f'{self.most_frequently_traded.total_num_closed_positions} closed)\n')
+        result += f'Net P&L: {self.format_change(self.net_pl)} ({self.format_change(self.net_pl_percentage)}%)\n'
+        result += f'\tRealised P&L: {self.format_change(self.net_realised_pl)} ' \
+            f'({self.format_change(self.net_realised_pl_percentage)}%)\n'
+        result += f'\t\tClosed Position(s) Value: {self.total_closed_position_value:.2f}\n'
+        result += f'\t\tClosed Position(s) Cost: ({self.total_closed_position_cost:.2f})\n'
+        result += f'\tUnrealised P&L: {self.format_change(self.net_unrealised_pl)} ' \
+            f'({self.format_change(self.net_unrealised_pl_percentage)}%)\n'
+        result += f'\t\tOpen Position(s) Value: {self.total_open_position_value:.2f}\n'
+        result += f'\t\tOpen Position(s) Cost: ({self.total_open_position_cost:.2f})\n'
 
         return result
+
+    @staticmethod
+    def format_change(value: float) -> str:
+        return f"{'+' if value > 0 else ''}{value:.2f}"

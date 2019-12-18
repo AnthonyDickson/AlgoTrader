@@ -3,7 +3,7 @@ import enum
 import sqlite3
 import sys
 from collections import defaultdict
-from typing import Dict, List, DefaultDict, Optional, Union, Any, Tuple
+from typing import Dict, List, DefaultDict, Optional, Union, Any, Tuple, Set
 
 from AlgoTrader.portfolio import Portfolio
 from AlgoTrader.position import Position
@@ -53,9 +53,11 @@ class Broker:
         self.db_cursor = database_connection.cursor()
         # TODO: Read portfolios and positions from database?
         self.portfolios: Dict[PortfolioID, Portfolio] = dict()
+
+        self.position_by_id: Dict[PositionID, Position] = dict()
+        self.open_positions_by_portfolio: DefaultDict[PortfolioID, Set[Position]] = defaultdict(lambda: set())
         self.positions_by_portfolio: DefaultDict[PortfolioID, List[Position]] = defaultdict(lambda: [])
         self.positions_by_ticker: DefaultDict[Ticker, List[Position]] = defaultdict(lambda: [])
-        self.position_by_id: Dict[PositionID, Position] = dict()
 
     def __del__(self):
         try:
@@ -121,14 +123,14 @@ class Broker:
         """
         return self.portfolios[portfolio_id].balance
 
-    def get_open_positions(self, portfolio_id: PortfolioID) -> List[Position]:
+    def get_open_positions(self, portfolio_id: PortfolioID) -> Set[Position]:
         """
         Get the open positions for the given portfolio.
 
         :param portfolio_id: The portfolio to check for open positions.
-        :return: A list of open positions.
+        :return: A set of open positions.
         """
-        return list(filter(lambda position: not position.is_closed, self.positions_by_portfolio[portfolio_id]))
+        return self.open_positions_by_portfolio[portfolio_id].copy()
 
     def get_quote(self, ticker) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
@@ -194,9 +196,6 @@ class Broker:
             (now,)
         )
 
-        for portfolio in self.portfolios.values():
-            portfolio.sync()
-
         for row in self.db_cursor:
             if row['dividend_amount'] > 0:
                 # TODO: Only pay dividend for shares that were owned on the ex-dividend date.
@@ -253,11 +252,14 @@ class Broker:
 
             position_id = position.id
             self.position_by_id[position.id] = position
+
+            self.open_positions_by_portfolio[portfolio_id].add(position)
             self.positions_by_portfolio[portfolio_id].append(position)
             self.positions_by_ticker[ticker].append(position)
         elif transaction_type == TransactionType.SELL:
             position = self.position_by_id[position_id]
             portfolio.close_position(position, price)
+            self.open_positions_by_portfolio[portfolio_id].discard(position)
         elif transaction_type == TransactionType.DIVIDEND:
             portfolio.pay_dividend(price, self.position_by_id[position_id])
         elif transaction_type == TransactionType.CASH_SETTLEMENT:
@@ -305,6 +307,7 @@ class Broker:
         :param date: The date the report was requested for. This affects the stock prices used in the valuation.
         """
         portfolio = self.portfolios[portfolio_id]
+        portfolio.sync()
         tickers = portfolio.tickers
 
         if len(tickers) == 0:

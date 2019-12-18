@@ -120,11 +120,11 @@ class Position:
         return self.dividends_received + self.cash_settlements_received
 
     @property
-    def pl_realised(self) -> float:
+    def realised_pl(self) -> float:
         """The realised profit and loss of the position."""
         return self._pl_realised + self.adjustments
 
-    def pl_unrealised(self, current_price) -> float:
+    def unrealised_pl(self, current_price) -> float:
         """
         Calculate the unrealised profit and loss of the position.
         This is equal to the current value of the position minus the total cost.

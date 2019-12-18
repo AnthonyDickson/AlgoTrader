@@ -3,7 +3,7 @@ import datetime
 import enum
 import hashlib
 import time
-from typing import Optional, Iterable, Set
+from typing import Optional, Iterable, Set, Dict
 
 from AlgoTrader.broker import Broker
 from AlgoTrader.exceptions import InsufficientFundsError
@@ -102,7 +102,15 @@ class MACDBot(TradingBotABC):
     MACD (Moving Average Convergence Divergence) indicator.
     """
 
+    def __init__(self, broker: Broker, historical_tickers: Dict[str, Dict[str, Set[Ticker]]]):
+        super().__init__(broker, historical_tickers['tickers'][min(historical_tickers['tickers'].keys())])
+
+        self.historical_tickers = historical_tickers['tickers']
+
     def update(self, today: datetime.datetime):
+        if str(today) in self.historical_tickers:
+            self._tickers.update(self.historical_tickers[str(today)])
+
         for ticker in self.tickers:
             try:
                 data, prev_data = self._broker.get_quote(ticker)
@@ -136,7 +144,7 @@ class MACDBot(TradingBotABC):
                     if position.ticker == ticker and position.current_value(market_price) > position.entry_value:
                         self._broker.close_position(position)
 
-                        net_pl += position.pl_realised
+                        net_pl += position.realised_pl
                         total_cost += position.cost
                         num_closed_positions += 1
                         quantity_sold += position.quantity

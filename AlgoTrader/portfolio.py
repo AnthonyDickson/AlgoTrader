@@ -62,7 +62,7 @@ class Portfolio:
         """The available amount of cash."""
         if self.should_fetch_new_balance:
             self.db_cursor.execute(
-                '''SELECT balance FROM portfolio_summary WHERE portfolio_id = ?''',
+                '''SELECT balance FROM portfolio_balance WHERE portfolio_id = ?''',
                 (self.id_in_database,)
             )
 
@@ -128,7 +128,7 @@ class Portfolio:
 
         print(PortfolioSummary(self, stock_prices))
 
-    def add_contribution(self, amount: float):
+    def deposit(self, amount: float):
         """
         Add an amount of cash to the balance of this portfolio as an contribution
         (i.e. the owner adds money to their account themselves).
@@ -329,7 +329,7 @@ class PortfolioSummary:
         result += '#' * 80 + '\n'
 
         result += f'Equity: {self.equity:.2f}\n'
-        result += f'Total Contribution: {self.contribution:.2f}\n'
+        result += f'Total Deposits: {self.contribution:.2f}\n'
         result += (f'Total Adjustments: {self.total_dividends + self.total_cash_settlements:.2f} '
                    f'({self.total_dividends:.2f} from dividends, '
                    f'{self.total_cash_settlements:.2f} from cash settlements)\n')

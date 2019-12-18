@@ -55,6 +55,7 @@ class Broker:
         self.portfolios[portfolio.id] = portfolio
 
         self._execute_transaction(portfolio.id, TransactionType.DEPOSIT, 1, initial_contribution, self.today)
+        portfolio.deposit(initial_contribution)
 
         return portfolio.id
 
@@ -67,7 +68,7 @@ class Broker:
         """
         self._execute_transaction(portfolio_id, TransactionType.DEPOSIT, 1, amount, self.today)
 
-        self.portfolios[portfolio_id].add_contribution(amount)
+        self.portfolios[portfolio_id].deposit(amount)
 
     def get_balance(self, portfolio_id: PortfolioID) -> float:
         """
@@ -203,6 +204,10 @@ class Broker:
 
                     self.portfolios[position.portfolio_id].pay(cash_settlement_amount)
 
+    # TODO: Move all calls that modifies a portfolio (e.g. opening/closing a position, paying dividends) into this
+    #  method.
+    # TODO: Refactor code so that portfolio and position IDs are same as the ones used in the database so we do not have
+    #  to convert between different IDs all the time.
     def _execute_transaction(self, portfolio_id: PortfolioID, transaction_type: TransactionType, quantity: int,
                              value: float, timestamp: datetime.datetime, position_id: Optional[int] = None):
         portfolio_id_in_database = self.portfolios[portfolio_id].id_in_database
@@ -216,6 +221,8 @@ class Broker:
                 (portfolio_id_in_database, position_id, transaction_type.name, quantity, value, timestamp)
             )
 
+    # TODO: Upload reports to database. This will allow for easy creation of plots such as equity vs. time. It also
+    #  avoids creating slow views on the database side.
     def print_report(self, portfolio_id: PortfolioID, date: datetime.datetime):
         """
         Print a summary report of the given portfolio.

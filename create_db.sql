@@ -34,14 +34,6 @@ CREATE TABLE IF NOT EXISTS "transaction_type"
     "id"   INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
     "name" TEXT    NOT NULL UNIQUE
 );
-INSERT OR
-REPLACE INTO "transaction_type" ("id", "name")
-VALUES (1, 'DEPOSIT'),
-       (2, 'WITHDRAWAL'),
-       (3, 'BUY'),
-       (4, 'SELL'),
-       (5, 'DIVIDEND'),
-       (6, 'CASH_SETTLEMENT');
 
 CREATE TABLE IF NOT EXISTS "daily_stock_data"
 (
@@ -110,7 +102,17 @@ CREATE TRIGGER transactions_position_id_on_insert
 BEGIN
     SELECT RAISE(ABORT, 'Transactions dealing with positions must specify a position ID.');
 END;
-
+CREATE VIEW position_totals_by_type (
+                                     position_id,
+                                     type,
+                                     total
+    )
+AS
+SELECT position_id,
+       type,
+       SUM(quantity * price)
+FROM transactions
+GROUP BY position_id, type;
 CREATE VIEW portfolio_summary (
                                portfolio_id,
                                timestamp,
@@ -184,7 +186,36 @@ FROM portfolio
                                        WHERE transaction_type.name = 'CASH_SETTLEMENT')
            )          AS total_cash_settlements
     FROM portfolio AS "inner"
+) sums
+                    ON sums.id = portfolio.id;
 
+DROP VIEW IF EXISTS portfolio_balance;
+
+CREATE VIEW portfolio_balance (
+                               portfolio_id,
+                               balance
+    )
+AS
+SELECT portfolio.id,
+       (sums.total_in - sums.total_out)
+FROM portfolio
+         INNER JOIN (
+    SELECT "inner".id as id,
+           (SELECT IFNULL(SUM(quantity * price), 0)
+            FROM transactions
+            WHERE transactions.portfolio_id = "inner".id
+              AND transactions.type IN (SELECT transaction_type.id
+                                        FROM transaction_type
+                                        WHERE transaction_type.name NOT IN ('WITHDRAWAL', 'BUY'))
+           )          AS total_in,
+           (SELECT IFNULL(SUM(quantity * price), 0)
+            FROM transactions
+            WHERE transactions.portfolio_id = "inner".id
+              AND transactions.type IN (SELECT transaction_type.id
+                                        FROM transaction_type
+                                        WHERE transaction_type.name IN ('WITHDRAWAL', 'BUY'))
+           )          AS total_out
+    FROM portfolio AS "inner"
 ) sums
                     ON sums.id = portfolio.id;
 
@@ -335,20 +366,6 @@ WHERE type = (
     WHERE transaction_type.name = 'BUY'
 );
 
-CREATE VIEW position_totals_by_type (
-                                     position_id,
-                                     type,
-                                     total
-    )
-AS
-SELECT position_id,
-       type,
-       SUM(quantity * price)
-FROM transactions
-         INNER JOIN position
-                    ON transactions.position_id = position.id
-GROUP BY position_id, type;
-
 CREATE VIEW closed_positions (
                               portfolio_id,
                               position_id
@@ -383,5 +400,15 @@ WHERE NOT EXISTS(
             FROM transaction_type
             WHERE transaction_type.name = 'SELL'
         )
-);
+    );
+
+INSERT OR
+REPLACE
+INTO "transaction_type" ("id", "name")
+VALUES (1, 'DEPOSIT'),
+       (2, 'WITHDRAWAL'),
+       (3, 'BUY'),
+       (4, 'SELL'),
+       (5, 'DIVIDEND'),
+       (6, 'CASH_SETTLEMENT');
 COMMIT;

@@ -37,6 +37,7 @@ def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], initial_co
         today = datetime.datetime.fromisoformat(dates[i])
         todays_data = fetch_data_fn(today, db_cursor)
 
+        # TODO: Make broker fetch and cache data and bots ask broker for quotes on tickers.
         broker.update(today)
 
         for ticker in tickers:

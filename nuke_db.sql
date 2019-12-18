@@ -13,6 +13,7 @@ DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
 DROP INDEX IF EXISTS "daily_stock_data_ticker_index";
 DROP TRIGGER IF EXISTS "transactions_position_id_on_update";
 DROP TRIGGER IF EXISTS "transactions_position_id_on_insert";
+DROP VIEW IF EXISTS "portfolio_balance";
 DROP VIEW IF EXISTS "portfolio_summary";
 DROP VIEW IF EXISTS "position_summary";
 DROP VIEW IF EXISTS "position_totals";

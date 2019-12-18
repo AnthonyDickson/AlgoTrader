@@ -1,26 +1,22 @@
 import datetime
 import sqlite3
-from typing import Set, Callable, Dict, Any
+from typing import Set
 
 from AlgoTrader.broker import Broker
 from AlgoTrader.interfaces import ITradingBot
 from AlgoTrader.types import Ticker
 
 
-def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], initial_contribution: float,
-              yearly_contribution: float,
-              db_connection: sqlite3.Connection,
-              fetch_data_fn: Callable[[datetime.datetime, sqlite3.Cursor], Dict[Ticker, Dict[str, Any]]]):
+def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yearly_contribution: float,
+              db_connection: sqlite3.Connection):
     """
     Test a bot on historical data and log its buy/sell actions and reports.
 
     :param bot: The bot to test.
     :param broker: The broker that will facilitate trades.
-    :param tickers: The tickers that the bot should buy and sell.
     :param initial_contribution: How much cash the bot starts with in its portfolio.
     :param yearly_contribution: How much cash gets added to the bot's portfolio at the start of each year.
     :param db_connection: A connection to a database that can be queried for daily stock data.
-    :param fetch_data_fn: The function that fetches the data for a given day.
     """
     db_cursor = db_connection.cursor()
 
@@ -28,26 +24,15 @@ def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], initial_co
     dates = list(map(lambda row: row['datetime'], db_cursor.fetchall()))
 
     yesterday = datetime.datetime.fromisoformat(dates[0])
-    yesterdays_data = fetch_data_fn(yesterday, db_cursor)
 
-    broker.today = yesterday
+    broker.seed_data(yesterday)
     bot.portfolio_id = broker.create_portfolio(bot.name, initial_contribution)
 
     for i in range(1, len(dates)):
         today = datetime.datetime.fromisoformat(dates[i])
-        todays_data = fetch_data_fn(today, db_cursor)
 
-        # TODO: Make broker fetch and cache data and bots ask broker for quotes on tickers.
         broker.update(today)
-
-        for ticker in tickers:
-            try:
-                datum = todays_data[ticker]
-                prev_datum = yesterdays_data[ticker]
-            except KeyError:
-                continue
-
-            bot.update(ticker, datum, prev_datum)
+        bot.update(today)
 
         first_month_in_quarter = today.month % 3 == 1
         has_entered_new_month = (today.month > yesterday.month or (today.month == 1 and yesterday.month == 12))
@@ -68,7 +53,6 @@ def main_loop(bot: ITradingBot, broker: Broker, tickers: Set[Ticker], initial_co
             broker.add_contribution(yearly_contribution, bot.portfolio_id)
 
         yesterday = today
-        yesterdays_data = todays_data
 
     broker.print_report(bot.portfolio_id, yesterday)
 

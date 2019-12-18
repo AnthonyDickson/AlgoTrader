@@ -1,6 +1,4 @@
-import hashlib
 import sqlite3
-import time
 from typing import List, Set, Dict, Optional
 
 from AlgoTrader.exceptions import InsufficientFundsError
@@ -12,8 +10,6 @@ from AlgoTrader.types import PortfolioID, Ticker
 class Portfolio:
 
     def __init__(self, owner_name: str, db_connection: sqlite3.Connection):
-        self.total_cash_settlements: float = 0.0
-        self.total_dividends: float = 0.0
         self._balance: float = 0.0
         self._contribution: float = 0.0
 
@@ -21,18 +17,15 @@ class Portfolio:
         self._tickers: Set[Ticker] = set()
 
         self._owner_name = owner_name
-        self._id: PortfolioID = hashlib.sha1(bytes(int(time.time()))).hexdigest()
 
         self.db_cursor = db_connection.cursor()
-        self.db_cursor.execute('''
-                INSERT INTO portfolio (hash, owner_name) VALUES (?, ?)
-                ''', (self.id, self._owner_name,))
 
-        self.id_in_database: int = self.db_cursor.lastrowid
+        with self.db_cursor.connection:
+            self.db_cursor.execute('''
+                    INSERT INTO portfolio (owner_name) VALUES (?)
+                    ''', (self._owner_name,))
 
-        self.db_cursor.connection.commit()
-
-        self.should_fetch_new_balance = True
+        self._id = PortfolioID(self.db_cursor.lastrowid)
 
     def __del__(self):
         try:
@@ -60,16 +53,6 @@ class Portfolio:
     @property
     def balance(self) -> float:
         """The available amount of cash."""
-        if self.should_fetch_new_balance:
-            self.db_cursor.execute(
-                '''SELECT balance FROM portfolio_balance WHERE portfolio_id = ?''',
-                (self.id_in_database,)
-            )
-
-            self.should_fetch_new_balance = False
-
-            self._balance = self.db_cursor.fetchone()['balance']
-
         return self._balance
 
     @property
@@ -87,33 +70,51 @@ class Portfolio:
         """The list of closed positions in this portfolio."""
         return list(filter(lambda position: position.is_closed, self._positions))
 
-    def open(self, position: Position):
+    def sync(self):
+        """Sync the portfolio data with the database."""
+        self.db_cursor.execute(
+            '''SELECT balance FROM portfolio_balance WHERE portfolio_id = ?''',
+            (self.id,)
+        )
+
+        new_balance = self.db_cursor.fetchone()['balance']
+
+        # TODO: Fix database and local balances diverging due to different floating point precision...
+        # assert abs(self._balance - new_balance) < sys.float_info.epsilon, \
+        #     f"Balances do not match: expected {new_balance}, but got {self._balance}"
+
+        self._balance = new_balance
+
+    def open_position(self, ticker: Ticker, price: float, quantity: int) -> Position:
         """
         Open a position and add it to this portfolio.
-        :param position: The position to open.
+
+        :param ticker: The ticker of the security that is being bought.
+        :param price: The current price of the security.
+        :param quantity: How many shares of the security that is being bought.
+        :return: The opened position.
         :raises InsufficientFundsError: if there is not enough funds to open the given position.
         """
-        if position.cost > self.balance:
-            raise InsufficientFundsError(f'Not enough funds to open the position worth {position.cost}.')
+        # Deduct cost first to ensure that the account has enough funds (it will raise an exception if it doesn't).
+        self._deduct(price * quantity)
 
-        self._balance -= position.cost
+        position = Position(self.id, ticker, price, quantity, self.db_cursor.connection)
+
         self._positions.append(position)
         self._tickers.add(position.ticker)
-        position.portfolio = self
-        self.should_fetch_new_balance = True
 
-    def close(self, position: Position, price: float):
+        return position
+
+    def close_position(self, position: Position, price: float):
         """
         Close the given position at the given price.
         :param position: The position to close.
         :param price: The current price of the security the position covers.
         :raises AssertionError: if the position was not added to the portfolio.
         """
-        assert position in self.positions, 'ERROR: Tried to close a position that does not belong to this portfolio.'
+        assert position in self.positions, 'Cannot close a position that does not belong to this portfolio.'
 
-        position.close(price)
-        self._balance += position.exit_value
-        self.should_fetch_new_balance = True
+        self._balance += position.close(price)
 
     def print_summary(self, stock_prices: Dict[Ticker, float], ticker: Optional[Ticker] = None):
         """
@@ -135,10 +136,38 @@ class Portfolio:
 
         :param amount: The amount to add to the portfolio.
         """
-        self.pay(amount)
+        self._pay(amount)
         self._contribution += amount
 
-    def pay(self, amount: float):
+    def withdraw(self, amount: float):
+        """
+        Withdraw funds from the portfolio account.
+
+        :param amount: The amount to withdraw.
+        """
+        self._deduct(amount)
+
+    def pay_dividend(self, amount: float, position):
+        """
+        Pay a dividend to this portfolio.
+
+        :param position: The position that the dividen is being paid for.
+        :param amount: The amount to be paid.
+        """
+        self._pay(amount)
+        position.dividends_received += amount
+
+    def pay_cash_settlement(self, amount: float, position):
+        """
+        Pay a cash settlement resulting from a stock split to this portfolio.
+
+        :param position: The position that the cash settlement is being paid for.
+        :param amount: The amount to be paid.
+        """
+        self._pay(amount)
+        position.cash_settlements_received += amount
+
+    def _pay(self, amount: float):
         """
         Add an amount of cash to the balance of this portfolio.
 
@@ -146,11 +175,20 @@ class Portfolio:
         """
         if amount < 0:
             raise ValueError(f'Cannot add negative amount {amount} to balance.')
-        elif amount == 0:
-            return
-        else:
+        elif amount > 0:
             self._balance += amount
             self.should_fetch_new_balance = True
+
+    def _deduct(self, amount: float):
+        """
+        Deduct an amount of cash to the balance of this portfolio.
+
+        :param amount: The amount to deduct from the portfolio.
+        """
+        if amount > self.balance:
+            raise InsufficientFundsError(f"Not enough funds to deduct {amount}.")
+        else:
+            self._balance -= amount
 
 
 # TODO: Update to use data from database.
@@ -220,7 +258,7 @@ class TickerPositionSummary:
 # TODO: Update to use data from database.
 # TODO: Calculate unrealised and net p&L using transaction data.
 # TODO: Upload reports to database.
-# TODO: Include YoY P&L
+# TODO: Include YoY P&L - this can be done by reading transaction data.
 class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
 

@@ -1,7 +1,7 @@
 import sqlite3
 from typing import Tuple
 
-from AlgoTrader.types import PortfolioID, Ticker
+from AlgoTrader.types import PortfolioID, Ticker, PositionID
 
 
 # TODO: Sync state with database.
@@ -33,15 +33,12 @@ class Position:
         self._is_closed: bool = False
 
         self.db_cursor = db_connection.cursor()
-        self.db_cursor.execute('''
-                INSERT INTO position (portfolio_id, ticker)
-                 VALUES (
-                    (SELECT id FROM portfolio WHERE hash=?), 
-                    ?
-                )
-                ''', (self.portfolio_id, self.ticker,))
+        self.db_cursor.execute(
+            "INSERT INTO position (portfolio_id, ticker) VALUES (?, ?)",
+            (self.portfolio_id, self.ticker,)
+        )
 
-        self.id_in_database: int = self.db_cursor.lastrowid
+        self._id = PositionID(self.db_cursor.lastrowid)
 
         self.db_cursor.connection.commit()
 
@@ -50,6 +47,10 @@ class Position:
             self.db_cursor.close()
         except sqlite3.ProgrammingError:
             pass
+
+    @property
+    def id(self) -> PositionID:
+        return self._id
 
     @property
     def portfolio_id(self) -> PortfolioID:
@@ -99,10 +100,19 @@ class Position:
         """How much this position has earned in dividends."""
         return self._dividends_received
 
+    @dividends_received.setter
+    def dividends_received(self, value: float):
+        self._dividends_received = value
+
     @property
     def cash_settlements_received(self) -> float:
         """How much this position has received in cash settlements."""
         return self._cash_settlements_received
+
+    @cash_settlements_received.setter
+    def cash_settlements_received(self, value: float):
+        """How much this position has received in cash settlements."""
+        self._cash_settlements_received = value
 
     @property
     def adjustments(self) -> float:
@@ -153,8 +163,7 @@ class Position:
 
         return total_dividend_amount
 
-    # TODO: Write unit tests for this...
-
+    # TODO: Write unit tests for this... and other stuff while I am at it...
     def adjust_for_stock_split(self, split_coefficient: float) -> Tuple[float, float, float, float]:
         """
         Adjust this position for a stock split.
@@ -176,11 +185,12 @@ class Position:
 
         return whole_shares, fractional_shares, adjusted_price, cash_settlement_amount
 
-    def close(self, price: float):
+    def close(self, price: float) -> float:
         """
         Close this position.
 
         :param price: The price of the security that this position is invested in at the time of closing.
+        :return: The value that the position closed at.
         """
         assert self._is_closed is not True, "Attempt to close a position that has already been closed."
 
@@ -188,6 +198,8 @@ class Position:
         self._pl_realised = self._quantity * (self._exit_price - self._entry_price)
         self._pl_unrealised = 0.0
         self._is_closed = True
+
+        return self.exit_value
 
     def __repr__(self):
         return (f'{self.__class__.__name__}(ticker={self._ticker}, entry_price={self.entry_price}, '

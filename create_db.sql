@@ -3,7 +3,6 @@ BEGIN TRANSACTION;
 CREATE TABLE IF NOT EXISTS "portfolio"
 (
     "id"         INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-    "hash"       TEXT    NOT NULL UNIQUE,
     "owner_name" TEXT    NOT NULL
 );
 

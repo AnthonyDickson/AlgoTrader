@@ -50,9 +50,9 @@ def main(config_file_path: str = 'config.json', initial_balance: float = 100000.
 
     try:
         broker = Broker(db_connection)
-        bot = BuyAndHoldBot(broker, buy_period)
+        bot = BuyAndHoldBot(broker, tickers, buy_period)
 
-        main_loop(bot, broker, tickers, initial_balance, yearly_contribution, db_connection, fetch_daily_data)
+        main_loop(bot, broker, initial_balance, yearly_contribution, db_connection)
     finally:
         db_connection.close()
 

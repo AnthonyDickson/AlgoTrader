@@ -1,28 +1,33 @@
 import abc
-from typing import Optional
+import datetime
+from typing import Optional, Iterable, Set
 
 from AlgoTrader.broker import Broker
-from AlgoTrader.types import PortfolioID
+from AlgoTrader.types import PortfolioID, Ticker
 
 
 # noinspection PyUnusedLocal
 class ITradingBot(abc.ABC):
-    def __init__(self, broker: Broker):
+    def __init__(self, broker: Broker, tickers: Iterable[Ticker]):
         """
         Create a new bot.
 
         :param broker: The broker that will facilitate trades.
+        :param tickers: The tickers that this bot should trade in.
         """
         ...
 
-    def update(self, ticker, datum, prev_datum):
+    def update(self, today: datetime.datetime):
         """
         Perform an update step where the bot may or may not open or close positions.
-        :param ticker: The ticker of the security to focus on.
-        :param datum: The data for the given ticker for a given day. This should include both close prices and
-        MACD information.
-        :param prev_datum: The data for the given ticker for the previous day.
+
+        :param today: Today's date.
         """
+        raise NotImplementedError
+
+    @property
+    def tickers(self) -> Set[Ticker]:
+        """Get the set of tickers that this bot trades in."""
         raise NotImplementedError
 
     @property

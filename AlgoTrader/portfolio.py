@@ -268,8 +268,6 @@ class PortfolioSummary:
         :param portfolio: The portfolio to report on.
         :param stock_prices: The current prices of the securities present in the given portfolio.
         """
-        # TODO: Track withdrawals amount.
-        self.total_withdrawals: float = 0.0
         self.total_num_closed_positions: float = 0.0
         self.total_num_open_positions: float = 0.0
         self.total_closed_position_cost: float = 0.0
@@ -328,48 +326,58 @@ class PortfolioSummary:
         except ZeroDivisionError:
             self.net_unrealised_pl_percentage = 0.0
 
-        self.balance = portfolio.balance
-        self.contribution = portfolio.contribution
-        self.net_contribution = self.contribution - self.total_withdrawals
-
-        self.equity = self.balance + self.total_open_position_value
-        self.equity_change = (self.equity / self.net_contribution * 100) - 100
-
         self.revenue = self.total_adjustments + self.total_closed_position_value
-        self.income = self.contribution + self.revenue
-        self.expenses = self.total_withdrawals + self.total_open_position_cost
+        self.expenses = self.total_position_cost
+        self.net_income = self.revenue - self.expenses
+
+        self.cash_debit = portfolio.contribution
+        # TODO: Track withdrawals amount.
+        self.cash_credit: float = 0.0
+        self.net_contribution = self.cash_debit - self.cash_credit
+
+        # TODO: Include dividends receivable once ex-dividend date data is available.
+        self.accounts_receivable = self.total_open_position_value
+
+        self.assets = self.net_contribution + self.accounts_receivable + self.net_income
+
+        self.equity = self.assets
+        self.equity_change = (self.equity / self.net_contribution * 100) - 100
 
     def __str__(self) -> str:
         result = ''
 
+        # TODO: Use multiline string instead.
         result += '#' * 80 + '\n'
         result += 'Portfolio Summary\n'
         result += '#' * 80 + '\n'
 
-        result += f'Net P&L: {self.format_change(self.net_pl)} ({self.format_change(self.net_pl_percentage)}%)\n'
-        result += f'\tRealised P&L:   {self.format_change(self.net_realised_pl)} ' \
-            f'({self.format_change(self.net_realised_pl_percentage)}%)\n'
+        result += f'Net P&L: {self.format_net_value(self.net_pl)} {self.format_change(self.net_pl_percentage)}%\n'
+        result += f'\tRealised P&L:   {self.format_net_value(self.net_realised_pl)} ' \
+            f'{self.format_change(self.net_realised_pl_percentage)}%\n'
         result += f'\t\tClosed Position(s) Value: {self.total_closed_position_value:.2f}\n'
         result += f'\t\tClosed Position(s) Cost: ({self.total_closed_position_cost:.2f})\n'
-        result += f'\tUnrealised P&L: {self.format_change(self.net_unrealised_pl)} ' \
-            f'({self.format_change(self.net_unrealised_pl_percentage)}%)\n'
+        result += f'\tUnrealised P&L: {self.format_net_value(self.net_unrealised_pl)} ' \
+            f'{self.format_change(self.net_unrealised_pl_percentage)}%\n'
         result += f'\t\tOpen Position(s) Value:   {self.total_open_position_value:.2f}\n'
         result += f'\t\tOpen Position(s) Cost:   ({self.total_open_position_cost:.2f})\n'
         result += '\n'
 
-        result += f'Equity: {self.equity:.2f} ({self.format_change(self.equity_change)}%)\n'
-        result += f'\tOpen Position(s) Market Value: {self.total_open_position_value:.2f}\n'
-        result += f'\tBalance:                       {self.balance:.2f}\n'
-        result += f'\t\tIncome:    {self.income:.2f}\n'
-        result += f'\t\t\tDeposits:         {self.contribution:.2f}\n'
-        result += f'\t\t\tAdjustments:      {self.total_adjustments:.2f}\n'
-        result += f'\t\t\t\tDividends:        {self.total_dividends_received:.2f}\n'
-        result += f'\t\t\t\tCash Settlements: {self.total_cash_settlements_received:.2f}\n'
-        result += f'\t\t\tClosed Positions: {self.total_closed_position_value:.2f}\n'
-
-        result += f'\t\tExpenses: ({self.expenses:.2f})\n'
-        result += f'\t\t\tWithdrawals:     ({self.total_withdrawals:.2f})\n'
-        result += f'\t\t\tOpen Positions:  ({self.total_open_position_cost:.2f})\n'
+        result += f'Equity: {self.equity:.2f} {self.format_change(self.equity_change)}%\n'
+        result += f'\tCash:                {self.format_net_value(self.net_contribution)}\n'
+        result += f'\t\tDeposits:     {self.cash_debit:.2f}\n'
+        result += f'\t\tWithdrawals: ({self.cash_credit:.2f})\n'
+        result += f'\tAccounts Receivable: {self.accounts_receivable:.2f}\n'
+        result += f'\t\tEquities:     {self.total_open_position_value:.2f}\n'
+        result += f'\tNet Income:          {self.format_net_value(self.net_income)}\n'
+        result += f'\t\tRevenue:      {self.revenue:.2f}\n'
+        result += f'\t\t\tEquities:     {self.total_closed_position_value:.2f}\n'
+        result += f'\t\t\tAdjustments:  {self.total_adjustments:.2f}\n'
+        result += f'\t\t\t\tDividends:         {self.total_dividends_received:.2f}\n'
+        result += f'\t\t\t\tCash Settlements:  {self.total_cash_settlements_received:.2f}\n'
+        result += f'\t\tExpenses:    ({self.expenses:.2f})\n'
+        result += f'\t\t\tEquities:    ({self.total_position_cost:.2f})\n'
+        result += f'\t\t\t\tOpen Positions:   ({self.total_open_position_cost:.2f})\n'
+        result += f'\t\t\t\tClosed Positions: ({self.total_closed_position_cost:.2f})\n'
         result += '\n'
 
         return result
@@ -377,3 +385,14 @@ class PortfolioSummary:
     @staticmethod
     def format_change(value: float) -> str:
         return f"{'+' if value > 0 else ''}{value:.2f}"
+
+    @staticmethod
+    def format_net_value(value: float) -> str:
+        formatted_value = f"{value:.2f}"
+
+        if value < 0:
+            formatted_value = f"({formatted_value})"
+        else:
+            formatted_value = f" {formatted_value} "
+
+        return formatted_value

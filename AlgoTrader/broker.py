@@ -87,6 +87,7 @@ class Broker:
             (self.today,)
         )
 
+        # TODO: Maintain dictionary of latest known prices for each ticker.
         self.yesterdays_stock_data = self.stock_data
         self.stock_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in self.db_cursor}
 

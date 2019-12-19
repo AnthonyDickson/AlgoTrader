@@ -122,7 +122,7 @@ class Position:
     @property
     def realised_pl(self) -> float:
         """The realised profit and loss of the position."""
-        return self._pl_realised + self.adjustments
+        return self._pl_realised + self.cash_settlements_received
 
     def unrealised_pl(self, current_price) -> float:
         """

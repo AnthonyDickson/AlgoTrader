@@ -65,6 +65,7 @@ def gen_rows(stock_price_data, macd_data, from_date):
     assert ticker == macd_ticker, "Both data sources must be for the same ticker."
 
     for date in filter(lambda datum_date: datum_date >= from_date, stock_price_data['Time Series (Daily)'].keys()):
+        # TODO: Allow for MACD data to be nullable, and make bots handle the case where specific data is not available.
         try:
             stock_price_datum = stock_price_data['Time Series (Daily)'][date]
             macd_datum = macd_data['Technical Analysis: MACD'][date]

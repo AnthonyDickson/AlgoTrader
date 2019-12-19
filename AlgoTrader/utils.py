@@ -103,7 +103,6 @@ def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yea
         today = datetime.datetime.fromisoformat(dates[i])
 
         broker.update(today)
-        bot.update(today)
 
         first_month_in_quarter = today.month % 3 == 1
         has_entered_new_month = (today.month > yesterday.month or (today.month == 1 and yesterday.month == 12))
@@ -118,10 +117,12 @@ def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yea
                 year -= 1
 
             print(f'{year} Q{quarter} Report')
-            broker.print_report(bot.portfolio_id, today)
+            broker.print_report(bot.portfolio_id, yesterday)
 
         if today.year > yesterday.year:
             broker.add_contribution(yearly_contribution, bot.portfolio_id)
+
+        bot.update(today)
 
         yesterday = today
 

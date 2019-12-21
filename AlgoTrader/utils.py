@@ -25,7 +25,7 @@ def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
     """
     """
     :param spx_tickers_file: The text file containing the current SPX ticker list.
-    :param spx_changes_file: The JSON file containing the SPX ticker list diffs.
+    :param spx_changes_path: The JSON file containing the SPX ticker list diffs.
     :param spx_output_file: The JSON file to write the earliest SPX ticker list to.
     :param spx_historical_output_file: The JSON file to write the historical SPX ticker list data to.
     :param spx_all_output_file: The JSON file to write the ticker list containing the tickers of all tickers that have 

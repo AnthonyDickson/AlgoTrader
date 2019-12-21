@@ -8,7 +8,7 @@ import plac
 from AlgoTrader.bot import BuyAndHoldBot, BuyPeriod
 from AlgoTrader.broker import Broker
 from AlgoTrader.types import Ticker
-from AlgoTrader.utils import main_loop
+from AlgoTrader.utils import main_loop, load_ticker_list_json
 
 
 def fetch_daily_data(date: datetime.datetime, db_cursor):
@@ -22,7 +22,8 @@ def fetch_daily_data(date: datetime.datetime, db_cursor):
 
 
 @plac.annotations(
-    config_file_path=plac.Annotation('The path to the JSON file that contains the config data.'),
+    spx_changes_path=plac.Annotation('The path to the JSON file that contains data on SPX component changes.'),
+    config_path=plac.Annotation('The path to the JSON file that contains the config data.'),
     initial_balance=plac.Annotation('How much cash the bot starts out with',
                                     kind='option', abbrev='i'),
     yearly_contribution=plac.Annotation('How much cash the bot adds to its portfolio on a yearly basis',
@@ -31,25 +32,29 @@ def fetch_daily_data(date: datetime.datetime, db_cursor):
                                kind='option', abbrev='p', choices=[period.name for period in BuyPeriod], type=str),
 
 )
-def main(config_file_path: str = 'config.json', initial_balance: float = 100000.00, yearly_contribution=10000.0,
+def main(spx_changes_path='ticker_lists/spx_changes.json', config_path: str = 'config.json',
+         initial_balance: float = 100000.00, yearly_contribution=10000.0,
          buy_period: Union[str, BuyPeriod] = BuyPeriod.WEEKLY.name):
     """Simulate a trading bot that simply buys SPY periodically and holds."""
     tickers = {Ticker('SPY')}
 
-    print(config_file_path, buy_period)
+    print(spx_changes_path, config_path, buy_period)
     print(tickers)
 
     if type(buy_period) is str:
         buy_period = {period.name: period for period in BuyPeriod}[buy_period]
 
-    with open(config_file_path, 'r') as file:
+    with open(spx_changes_path, 'r') as file:
+        spx_changes = json.load(file)
+
+    with open(config_path, 'r') as file:
         config = json.load(file)
 
     db_connection = sqlite3.connect(config['DATABASE_URL'])
     db_connection.row_factory = sqlite3.Row
 
     try:
-        broker = Broker(db_connection)
+        broker = Broker(spx_changes, db_connection)
         bot = BuyAndHoldBot(broker, tickers, buy_period)
 
         main_loop(bot, broker, initial_balance, yearly_contribution, db_connection)

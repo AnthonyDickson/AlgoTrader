@@ -120,8 +120,18 @@ class MACDBot(TradingBotABC):
             ticker_prefix = f'[{ticker}]'
             log_prefix = f'[{today}] {ticker_prefix:6s}'
 
-            if prev_data and data['macd_histogram'] > 0 and data['signal_line'] < data['macd_line'] < 0 and \
-                    prev_data['macd_line'] <= prev_data['signal_line']:
+            try:
+                has_bullish_crossover = data['signal_line'] < data['macd_line'] < 0 and prev_data['macd_line'] <= prev_data['signal_line']
+                should_buy = data['macd_histogram'] > 0 and has_bullish_crossover
+
+                has_bearish_crossover = 0 < data['macd_line'] < data['signal_line'] and prev_data['macd_line'] >= prev_data['signal_line']
+                should_sell = data['macd_histogram'] < 0 and has_bearish_crossover
+            # TypeError raised when `prev_data` is None or any of ['macd_line', 'signal_line', 'histogram'] are None for
+            # `data` or `prev_data`.
+            except TypeError:
+                continue
+
+            if should_buy:
                 market_price = data['close']
                 balance = self._broker.get_balance(self.portfolio_id)
                 quantity: int = int((0.01 * balance) // market_price)
@@ -130,8 +140,7 @@ class MACDBot(TradingBotABC):
                     self._broker.execute_buy_order(ticker, quantity, self.portfolio_id)
 
                     print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
-            elif prev_data and data['macd_histogram'] < 0 and 0 < data['macd_line'] < data['signal_line'] and \
-                    prev_data['macd_line'] >= prev_data['signal_line']:
+            elif should_sell:
                 market_price = data['close']
 
                 num_closed_positions: int = 0

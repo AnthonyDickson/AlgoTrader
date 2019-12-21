@@ -363,11 +363,11 @@ class PortfolioSummary:
         result += '\n'
 
         result += f'Equity: {self.equity:.2f} {self.format_change(self.equity_change)}%\n'
+        result += f'\tAccounts Receivable: {self.format_net_value(self.accounts_receivable)}\n'
+        result += f'\t\tEquities:     {self.total_open_position_value:.2f}\n'
         result += f'\tCash:                {self.format_net_value(self.net_contribution)}\n'
         result += f'\t\tDeposits:     {self.cash_debit:.2f}\n'
         result += f'\t\tWithdrawals: ({self.cash_credit:.2f})\n'
-        result += f'\tAccounts Receivable: {self.accounts_receivable:.2f}\n'
-        result += f'\t\tEquities:     {self.total_open_position_value:.2f}\n'
         result += f'\tNet Income:          {self.format_net_value(self.net_income)}\n'
         result += f'\t\tRevenue:      {self.revenue:.2f}\n'
         result += f'\t\t\tEquities:     {self.total_closed_position_value:.2f}\n'
@@ -388,7 +388,7 @@ class PortfolioSummary:
 
     @staticmethod
     def format_net_value(value: float) -> str:
-        formatted_value = f"{value:.2f}"
+        formatted_value = f"{abs(value):.2f}"
 
         if value < 0:
             formatted_value = f"({formatted_value})"

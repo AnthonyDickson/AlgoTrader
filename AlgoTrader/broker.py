@@ -38,7 +38,7 @@ class TransactionType(enum.Enum):
 class Broker:
     """A broker manages portfolios and executes buy/sell orders on behalf of traders."""
 
-    def __init__(self, database_connection: sqlite3.Connection):
+    def __init__(self, spx_changes, database_connection: sqlite3.Connection):
         """
         Create a new broker.
 
@@ -49,6 +49,8 @@ class Broker:
 
         self.stock_data: Dict[Ticker, Dict[str, Any]] = dict()
         self.yesterdays_stock_data: Dict[Ticker, Dict[str, Any]] = dict()
+
+        self.spx_changes: Dict[str, Dict[str, Dict[str: str]]] = spx_changes
 
         self.db_cursor = database_connection.cursor()
         # TODO: Read portfolios and positions from database?
@@ -197,14 +199,24 @@ class Broker:
             (now,)
         )
 
+        if str(self.today) in self.spx_changes:
+            ticker = self.spx_changes[str(self.today)]['removed']['ticker']
+
+            # We close any positions that trade in securities that have been taken off SPX as a quick fix.
+            # TODO: Only close positions if a company has been delisted.
+            if len(ticker) > 0:
+                for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[ticker]):
+                    self.close_position(position)
+
         for row in self.db_cursor:
             if row['dividend_amount'] > 0:
-                # TODO: Only pay dividend for shares that were owned on the ex-dividend date.
+                # TODO: Only pay dividend for shares that were owned prior to the ex-dividend date.
                 # TODO: Get data for ex-dividend dates.
                 for position in filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]):
                     self._execute_transaction(TransactionType.DIVIDEND, position.portfolio_id, row['dividend_amount'],
                                               position_id=position.id)
-            elif abs(row['split_coefficient'] - 1) > sys.float_info.epsilon:  # roughly equal to
+
+            if abs(row['split_coefficient'] - 1) > sys.float_info.epsilon:  # roughly equal to
                 # Need to make list here to avoid positions being added during stock split which the filter then
                 # iterates up to, splitting that stock again, and again ad infinitum....
                 positions = list(filter(lambda p: not p.is_closed, self.positions_by_ticker[row['ticker']]))
@@ -314,13 +326,15 @@ class Broker:
         if len(tickers) == 0:
             portfolio.print_summary(dict())
         else:
-            ticker_placeholders = ','.join(['?'] * len(tickers))
-
-            self.db_cursor.execute(f'''
-            SELECT ticker, close
-            FROM daily_stock_data
-            WHERE datetime=? AND ticker IN ({ticker_placeholders});
-            ''', (date, *tuple(tickers)))
+            self.db_cursor.execute(
+                f'''
+                SELECT ticker, close, datetime 
+                FROM daily_stock_data 
+                WHERE datetime <= ? 
+                GROUP BY ticker 
+                ORDER BY ticker;
+                '''
+            )
 
             stock_data = {row['ticker']: row['close'] for row in self.db_cursor.fetchall()}
 

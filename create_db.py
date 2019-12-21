@@ -7,7 +7,7 @@ import time
 import plac
 import requests
 
-from AlgoTrader.utils import load_ticker_list
+from AlgoTrader.utils import load_ticker_list_json
 
 
 def log(msg: str, msg_type='INFO', inplace=False):
@@ -65,35 +65,37 @@ def gen_rows(stock_price_data, macd_data, from_date):
     assert ticker == macd_ticker, "Both data sources must be for the same ticker."
 
     for date in filter(lambda datum_date: datum_date >= from_date, stock_price_data['Time Series (Daily)'].keys()):
-        # TODO: Allow for MACD data to be nullable, and make bots handle the case where specific data is not available.
+        data = (ticker, datetime.datetime.fromisoformat(date))
+
         try:
             stock_price_datum = stock_price_data['Time Series (Daily)'][date]
-            macd_datum = macd_data['Technical Analysis: MACD'][date]
+            data += (
+                stock_price_datum['1. open'],
+                stock_price_datum['2. high'],
+                stock_price_datum['3. low'],
+                stock_price_datum['4. close'],
+                stock_price_datum['5. adjusted close'],
+                stock_price_datum['6. volume'],
+                stock_price_datum['7. dividend amount'],
+                stock_price_datum['8. split coefficient'],
+            )
         except KeyError:
-            if date not in stock_price_data['Time Series (Daily)']:
-                log(f'Stock data for {ticker} on {date} is missing, skipping this day\'s data.', msg_type='WARNING')
-
-            if date not in macd_data['Technical Analysis: MACD']:
-                log(f'Technical (MACD) data for {ticker} on {date} is missing, skipping this day\'s data.',
-                    msg_type='WARNING')
-
+            log(f'Stock data for {ticker} on {date} is missing, skipping this day\'s data.', msg_type='WARNING')
             continue
 
-        yield (
-            ticker,
-            datetime.datetime.fromisoformat(date),  # Normalise dates to include time (defaults to midnight)
-            stock_price_datum['1. open'],
-            stock_price_datum['2. high'],
-            stock_price_datum['3. low'],
-            stock_price_datum['4. close'],
-            stock_price_datum['5. adjusted close'],
-            stock_price_datum['6. volume'],
-            stock_price_datum['7. dividend amount'],
-            stock_price_datum['8. split coefficient'],
-            macd_datum['MACD_Hist'],
-            macd_datum['MACD'],
-            macd_datum['MACD_Signal']
-        )
+        try:
+            macd_datum = macd_data['Technical Analysis: MACD'][date]
+            data += (
+                macd_datum['MACD_Hist'],
+                macd_datum['MACD'],
+                macd_datum['MACD_Signal'],
+            )
+        except KeyError:
+            data += (None, None, None,)
+            log(f'Technical (MACD) data for {ticker} on {date} is missing, '
+                f'filling with NULL.', msg_type='WARNING')
+
+        yield data
 
 
 @plac.annotations(
@@ -121,9 +123,10 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
     with open(config_file, 'r') as file:
         config = json.load(file)
 
-    tickers = load_ticker_list(ticker_list)
+    tickers = load_ticker_list_json(ticker_list)
 
     api_url = 'https://www.alphavantage.co/query'
+    log('Checking demo data for earliest stock data date...')
     earliest_date = get_earliest_date(api_url)
 
     db_connection = sqlite3.connect(config['DATABASE_URL'])
@@ -158,52 +161,74 @@ def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.
             'apikey': config['API_KEY']
         }
 
-        if num_requests_for_batch + 2 > max_requests_per_minute:
-            log(f'Reached maximum number requests for time period ({max_requests_per_minute}/minute).')
-
-            time_to_wait = 60 - int(time.time() - batch_start) + 3
-            time_left = time_to_wait
-
-            while time_left > 0:
-                log(f'Waiting for {time_left:02d}s...', inplace=True)
-                time.sleep(1.0)
-                time_left -= 1
-
-            log(f'Waited for {time_to_wait:02d}s\n', inplace=True)
-            batch_start = time.time()
-            ticker_start = time.time()
-            num_requests_for_batch = 0
+        r = None
+        has_fetched_data = False
 
         log(f'Fetching data for {ticker}... ')
 
-        try:
-            r = requests.get(api_url, params=stock_price_payload)
-            r.raise_for_status()
-            stock_price_data = r.json()
+        while not has_fetched_data:
+            if num_requests_for_batch + 2 > max_requests_per_minute:
+                log(f'Reached maximum number requests for time period ({max_requests_per_minute}/minute).')
 
-            r = requests.get(api_url, params=macd_payload)
-            r.raise_for_status()
-            macd_data = r.json()
-        except requests.exceptions.HTTPError as e:
-            db_connection.rollback()
+                time_to_wait = 60 - int(time.time() - batch_start) + 3
+                time_left = time_to_wait
 
-            log(f'HTTP {e}', msg_type='ERROR')
+                while time_left > 0:
+                    log(f'Waiting for {time_left:02d}s...', inplace=True)
+                    time.sleep(1.0)
+                    time_left -= 1
 
-            if e.response.status_code == 503:
-                log(f'It is likely that you have hit your daily API limit.', msg_type='ERROR')
+                log(f'Waited for {time_to_wait:02d}s\n', inplace=True)
+                batch_start = time.time()
+                ticker_start = time.time()
+                num_requests_for_batch = 0
 
-            break
+            try:
+                r = requests.get(api_url, params=stock_price_payload)
+                num_requests_for_batch += 1
+                r.raise_for_status()
+                stock_price_data = r.json()
 
-        num_requests_for_batch += 2
+                if 'Meta Data' not in stock_price_data:
+                    log(f"Meta data field not found in response: "
+                        f"{stock_price_data} when using URL: '{r.url}'. "
+                        f"Skipping data for {ticker}.", msg_type='WARNING')
 
-        db_cursor.executemany('''
-        INSERT OR IGNORE INTO daily_stock_data 
-            (ticker, datetime, open, high, low, close, adjusted_close, volume, dividend_amount, split_coefficient, 
-                macd_histogram, macd_line, signal_line) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', gen_rows(stock_price_data, macd_data, from_date=earliest_date))
+                    break
 
-        db_connection.commit()
+                r = requests.get(api_url, params=macd_payload)
+                num_requests_for_batch += 1
+                r.raise_for_status()
+                macd_data = r.json()
+
+                if 'Meta Data' not in macd_data:
+                    log(f"Meta data field not found in response: "
+                        f"{stock_price_data} when using URL: '{r.url}'. "
+                        f"Skipping data for {ticker}.", msg_type='WARNING')
+
+                    break
+
+                has_fetched_data = True
+            except requests.exceptions.HTTPError as e:
+                log(f'HTTP {e}', msg_type='ERROR')
+                log(f"Encountered error when fetching from '{r.url}'.")
+                log("Retrying in 5 seconds...")
+                time.sleep(5)
+            else:
+                with db_connection:
+                    db_cursor.executemany(
+                        '''
+                        INSERT OR IGNORE INTO daily_stock_data 
+                            (ticker, datetime, open, high, low, close, 
+                             adjusted_close, volume, dividend_amount, 
+                             split_coefficient, macd_histogram, macd_line, 
+                             signal_line) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''',
+                        gen_rows(stock_price_data,
+                                 macd_data,
+                                 from_date=earliest_date)
+                    )
 
         num_tickers_processed += 1
         ticker_elapsed_time = time.time() - ticker_start

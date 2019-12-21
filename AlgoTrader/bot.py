@@ -120,7 +120,7 @@ class MACDBot(TradingBotABC):
             ticker_prefix = f'[{ticker}]'
             log_prefix = f'[{today}] {ticker_prefix:6s}'
 
-            if prev_data and data['macd_histogram'] > 0 and 0 > data['macd_line'] > data['signal_line'] and \
+            if prev_data and data['macd_histogram'] > 0 and data['signal_line'] < data['macd_line'] < 0 and \
                     prev_data['macd_line'] <= prev_data['signal_line']:
                 market_price = data['close']
                 balance = self._broker.get_balance(self.portfolio_id)

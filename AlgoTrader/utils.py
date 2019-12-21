@@ -15,9 +15,11 @@ from AlgoTrader.types import Ticker
     spx_changes_file=plac.Annotation('The JSON file containing the SPX ticker list diffs.'),
     spx_output_file=plac.Annotation('The JSON file to write the earliest SPX ticker list to.'),
     spx_historical_output_file=plac.Annotation('The JSON file to write the historical SPX ticker list data to.'),
+    spx_all_output_file=plac.Annotation('The JSON file to write the ticker list containing the tickers of all tickers '
+                                        'that have been in SPX.'),
 )
 def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
-                                 spx_output_file: str, spx_historical_output_file: str):
+                                 spx_output_file: str, spx_historical_output_file: str, spx_all_output_file: str):
     """
     Parse SPX ticker lists to produce historical SPX ticker lists.
     """
@@ -26,6 +28,8 @@ def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
     :param spx_changes_file: The JSON file containing the SPX ticker list diffs.
     :param spx_output_file: The JSON file to write the earliest SPX ticker list to.
     :param spx_historical_output_file: The JSON file to write the historical SPX ticker list data to.
+    :param spx_all_output_file: The JSON file to write the ticker list containing the tickers of all tickers that have 
+                                been in SPX.
     """
     spx_tickers_now = load_ticker_list(spx_tickers_file)
 
@@ -40,6 +44,10 @@ def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
         }
     }
 
+    spx_tickers_all = {
+        'tickers': set(spx_tickers_now)
+    }
+
     prev_date = latest
 
     for date in sorted(spx_changes, reverse=True):
@@ -48,6 +56,7 @@ def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
         the_date = datetime.datetime(year, month, day)
 
         next_ticker_set = spx_tickers_historical['tickers'][prev_date].copy()
+        spx_tickers_all['tickers'].update(next_ticker_set)
 
         if len(spx_changes[date]['added']['ticker']) > 0:
             next_ticker_set.difference_update([spx_changes[date]['added']['ticker']])
@@ -71,11 +80,18 @@ def parse_historical_spx_tickers(spx_tickers_file: str, spx_changes_file: str,
         date: list(sorted(spx_tickers_historical['tickers'][date])) for date in spx_tickers_historical['tickers']
     }
 
+    spx_tickers_all = {
+        'tickers': list(sorted(spx_tickers_all['tickers']))
+    }
+
     with open(spx_output_file, 'w') as file:
         json.dump(earliest_spx_tickers, file)
 
     with open(spx_historical_output_file, 'w') as file:
         json.dump(spx_tickers_historical, file)
+
+    with open(spx_all_output_file, 'w') as file:
+        json.dump(spx_tickers_all, file)
 
 
 def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yearly_contribution: float,
@@ -152,3 +168,21 @@ def load_ticker_list(ticker_list) -> Set[Ticker]:
         raise ValueError("ERROR: Empty ticker list.")
 
     return tickers
+
+
+def load_ticker_list_json(ticker_list) -> Set[Ticker]:
+    """
+    Load a JSON format list of tickers.
+
+    Note: The file is expected to be correctly formatted JSON and have a list
+    of tickers contained in a 'tickers' property.
+    :param ticker_list: The path to the file that contains the list of tickers.
+    :return: A set of tickers.
+    """
+    with open(ticker_list, 'r') as file:
+        tickers = json.load(file)['tickers']
+
+    if len(tickers) == 0:
+        raise ValueError("ERROR: Empty ticker list.")
+
+    return set(tickers)

@@ -46,9 +46,9 @@ CREATE TABLE IF NOT EXISTS "daily_stock_data"
     "volume"            INTEGER NOT NULL,
     "dividend_amount"   REAL    NOT NULL,
     "split_coefficient" REAL    NOT NULL,
-    "macd_histogram"    REAL    NOT NULL,
-    "macd_line"         REAL    NOT NULL,
-    "signal_line"       REAL    NOT NULL,
+    "macd_histogram"    REAL,
+    "macd_line"         REAL,
+    "signal_line"       REAL,
     PRIMARY KEY ("ticker", "datetime")
 );
 
@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS "daily_stock_data_ticker_index" ON "daily_stock_data"
                                                                                   "ticker" ASC
     );
 
-CREATE TRIGGER transactions_position_id_on_update
+CREATE TRIGGER IF NOT EXISTS transactions_position_id_on_update
     BEFORE UPDATE
     ON transactions
     WHEN (NEW.type IN (3, 4, 5, 6) AND NEW.position_id IS NULL)
@@ -94,37 +94,39 @@ BEGIN
     SELECT RAISE(ABORT, 'Transactions dealing with positions must specify a position ID.');
 END;
 
-CREATE TRIGGER transactions_position_id_on_insert
+CREATE TRIGGER IF NOT EXISTS transactions_position_id_on_insert
     BEFORE INSERT
     ON transactions
     WHEN (NEW.type IN (3, 4, 5, 6) AND NEW.position_id IS NULL)
 BEGIN
     SELECT RAISE(ABORT, 'Transactions dealing with positions must specify a position ID.');
 END;
-CREATE VIEW position_totals_by_type (
-                                     position_id,
-                                     type,
-                                     total
-    )
+CREATE VIEW IF NOT EXISTS position_totals_by_type
+            (
+             position_id,
+             type,
+             total
+                )
 AS
 SELECT position_id,
        type,
        SUM(quantity * price)
 FROM transactions
 GROUP BY position_id, type;
-CREATE VIEW portfolio_summary (
-                               portfolio_id,
-                               timestamp,
-                               total_in,
-                               total_out,
-                               balance,
-                               num_open_positions,
-                               num_closed_positions,
-                               num_all_positions,
-                               total_dividends,
-                               total_cash_settlements,
-                               total_adjustments
-    )
+CREATE VIEW IF NOT EXISTS portfolio_summary
+            (
+             portfolio_id,
+             timestamp,
+             total_in,
+             total_out,
+             balance,
+             num_open_positions,
+             num_closed_positions,
+             num_all_positions,
+             total_dividends,
+             total_cash_settlements,
+             total_adjustments
+                )
 AS
 SELECT portfolio.id,
        CURRENT_TIMESTAMP,
@@ -190,10 +192,11 @@ FROM portfolio
 
 DROP VIEW IF EXISTS portfolio_balance;
 
-CREATE VIEW portfolio_balance (
-                               portfolio_id,
-                               balance
-    )
+CREATE VIEW IF NOT EXISTS portfolio_balance
+            (
+             portfolio_id,
+             balance
+                )
 AS
 SELECT portfolio.id,
        (sums.total_in - sums.total_out)
@@ -218,24 +221,25 @@ FROM portfolio
 ) sums
                     ON sums.id = portfolio.id;
 
-CREATE VIEW position_summary (
-                              position_id,
-                              portfolio_id,
-                              ticker,
-                              open_date,
-                              close_date,
-                              is_closed,
-                              quantity,
-                              entry_price,
-                              entry_value,
-                              exit_price,
-                              exit_value,
-                              total_dividends,
-                              total_cash_settlements,
-                              total_adjustments,
-                              realised_pl,
-                              realised_pl_percentage
-    )
+CREATE VIEW IF NOT EXISTS position_summary
+            (
+             position_id,
+             portfolio_id,
+             ticker,
+             open_date,
+             close_date,
+             is_closed,
+             quantity,
+             entry_price,
+             entry_value,
+             exit_price,
+             exit_value,
+             total_dividends,
+             total_cash_settlements,
+             total_adjustments,
+             realised_pl,
+             realised_pl_percentage
+                )
 AS
 SELECT position.id,
        position.portfolio_id,
@@ -318,13 +322,14 @@ FROM position
          INNER JOIN position_totals AS sums
                     ON sums.position_id = position.id;
 
-CREATE VIEW position_totals (
-                             position_id,
-                             entry_value,
-                             exit_value,
-                             total_dividends,
-                             total_cash_settlements
-    )
+CREATE VIEW IF NOT EXISTS position_totals
+            (
+             position_id,
+             entry_value,
+             exit_value,
+             total_dividends,
+             total_cash_settlements
+                )
 AS
 SELECT a.position_id,
        IFNULL(a.total, 0) as entry_value,
@@ -365,10 +370,11 @@ WHERE type = (
     WHERE transaction_type.name = 'BUY'
 );
 
-CREATE VIEW closed_positions (
-                              portfolio_id,
-                              position_id
-    )
+CREATE VIEW IF NOT EXISTS closed_positions
+            (
+             portfolio_id,
+             position_id
+                )
 AS
 SELECT portfolio_id, id AS position_id
 FROM position
@@ -383,10 +389,11 @@ WHERE EXISTS(
               )
           );
 
-CREATE VIEW open_positions (
-                            portfolio_id,
-                            position_id
-    )
+CREATE VIEW IF NOT EXISTS open_positions
+            (
+             portfolio_id,
+             position_id
+                )
 AS
 SELECT portfolio_id, id AS position_id
 FROM position

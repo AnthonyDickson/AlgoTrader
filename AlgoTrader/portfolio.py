@@ -1,10 +1,11 @@
 import datetime
 import sqlite3
-from typing import Set, Optional
+from typing import Set, Optional, Dict, Tuple
 
 from AlgoTrader.exceptions import InsufficientFundsError
+from AlgoTrader.formatting import format_net_value
 from AlgoTrader.position import Position
-from AlgoTrader.types import PortfolioID, Ticker, TransactionType
+from AlgoTrader.types import PortfolioID, Ticker, TransactionType, PositionID
 
 
 # TODO: Sync state with database.
@@ -14,9 +15,12 @@ class Portfolio:
                  db_connection: sqlite3.Connection):
         self._balance: float = 0.0
         self._contribution: float = 0.0
+        self._taxes_paid: float = 0.0
         self._created_timestamp: datetime.datetime = timestamp
         self._positions: Set[Position] = set()
         self._open_positions: Set[Position] = set()
+        self._closed_positions: Set[Position] = set()
+        self._positions_by_id: Dict[PositionID, Position] = dict()
         self._tickers: Set[Ticker] = set()
 
         self._owner_name = owner_name
@@ -49,6 +53,11 @@ class Portfolio:
         return self._contribution
 
     @property
+    def taxes_paid(self) -> float:
+        """How much taxes this portfolio has paid to date."""
+        return self._taxes_paid
+
+    @property
     def balance(self) -> float:
         """The available amount of cash."""
         return self._balance
@@ -60,8 +69,18 @@ class Portfolio:
 
     @property
     def open_positions(self) -> Set[Position]:
-        """The list of open positions in this portfolio."""
+        """The set of open positions in this portfolio."""
         return self._open_positions.copy()
+
+    @property
+    def closed_positions(self) -> Set[Position]:
+        """The list of closed positions in this portfolio."""
+        return self._closed_positions.copy()
+
+    @property
+    def positions_by_id(self) -> Dict[PositionID, Position]:
+        """A dictionary mapping position IDs to positions in this portfolio."""
+        return self._positions_by_id.copy()
 
     def sync(self):
         """Sync the portfolio data with the database."""
@@ -100,6 +119,7 @@ class Portfolio:
         self._tickers.add(position.ticker)
         self._positions.add(position)
         self._open_positions.add(position)
+        self._positions_by_id[position.id] = position
 
         return position
 
@@ -116,6 +136,7 @@ class Portfolio:
 
         self._balance += position.close(price, timestamp)
         self._open_positions.discard(position)
+        self._closed_positions.add(position)
 
     # TODO: Only use transactions up to and including given date when giving report.
     def print_summary(self, period_end: datetime.datetime,
@@ -127,6 +148,19 @@ class Portfolio:
         the created_timestamp for when the portfolio was created will be used.
         """
         print(PortfolioSummary(self, self.db_connection, period_end, period_start))
+
+    def generate_tax_report(self, report_date: datetime.datetime) -> 'TaxReport':
+        """
+        Generate a tax report for the given tax year.
+
+        :param report_date: The date that the report is being created on. This date's year minus one will be used for
+        the tax year.
+        :return: A completed tax report for this portfolio.
+        """
+        tax_year = datetime.datetime(year=report_date.year - 1, month=1, day=1, hour=0, minute=0, second=0,
+                                     microsecond=0)
+
+        return TaxReport(tax_year, self, self.db_connection)
 
     def deposit(self, amount: float):
         """
@@ -145,6 +179,19 @@ class Portfolio:
         :param amount: The amount to withdraw.
         """
         self._deduct(amount)
+
+    # TODO: Use self._deduct() to deduct maximum amount, any left over amount should be automatically deducted from
+    #  future income.
+    def deduct_taxes(self, amount: float):
+        """
+        Pay the taxman.
+
+        Note: This may put the account into debt.
+
+        :param amount: The amount of taxes to deduct from the account.
+        """
+        self._balance -= amount
+        self._taxes_paid += amount
 
     def pay_dividend(self, amount: float, position: Position):
         """
@@ -231,17 +278,18 @@ class PortfolioSummary:
         self.total_withdrawals: float = 0.0
         self.total_dividends_received: float = 0.0
         self.total_cash_settlements_received: float = 0.0
+        self.total_taxes_paid: float = 0.0
 
         cursor = db_connection.execute(
             f"""
             SELECT type, SUM(price * quantity) AS total
             FROM transactions 
-            WHERE portfolio_id = ? AND ? <= timestamp AND timestamp <= ? AND type IN (?, ?, ?, ?)
+            WHERE portfolio_id = ? AND ? <= timestamp AND timestamp <= ? AND type IN (?, ?, ?, ?, ?)
             GROUP BY type;
             """,
             (portfolio.id, period_start, period_end,
              TransactionType.DEPOSIT.value, TransactionType.WITHDRAWAL.value,
-             TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value)
+             TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value, TransactionType.TAX.value)
         )
 
         for row in cursor:
@@ -253,6 +301,8 @@ class PortfolioSummary:
                 self.total_dividends_received = row['total']
             elif row['type'] == TransactionType.CASH_SETTLEMENT.value:
                 self.total_cash_settlements_received = row['total']
+            elif row['type'] == TransactionType.TAX.value:
+                self.total_taxes_paid = row['total']
             else:
                 raise ValueError(f"Got unexpected type from totals query: {row['type']}.")
 
@@ -317,7 +367,7 @@ class PortfolioSummary:
             self.net_unrealised_pl_percentage = 0.0
 
         self.revenue = self.total_adjustments + self.total_closed_position_value
-        self.expenses = self.total_position_cost
+        self.expenses = self.total_position_cost + self.total_taxes_paid
         self.net_income = self.revenue - self.expenses
 
         self.net_contribution = self.total_deposits - self.total_withdrawals
@@ -340,12 +390,12 @@ class PortfolioSummary:
         result += 'Portfolio Summary\n'
         result += '#' * 80 + '\n'
 
-        result += f'Net P&L: {self.format_net_value(self.net_pl)} {self.format_change(self.net_pl_percentage)}%\n'
-        result += f'\tRealised P&L:   {self.format_net_value(self.net_realised_pl)} ' \
+        result += f'Net P&L: {format_net_value(self.net_pl)} {self.format_change(self.net_pl_percentage)}%\n'
+        result += f'\tRealised P&L:   {format_net_value(self.net_realised_pl)} ' \
                   f'{self.format_change(self.net_realised_pl_percentage)}%\n'
         result += f'\t\tClosed Position(s) Value: {self.total_closed_position_value:.2f}\n'
         result += f'\t\tClosed Position(s) Cost: ({self.total_closed_position_cost:.2f})\n'
-        result += f'\tUnrealised P&L: {self.format_net_value(self.net_unrealised_pl)} ' \
+        result += f'\tUnrealised P&L: {format_net_value(self.net_unrealised_pl)} ' \
                   f'{self.format_change(self.net_unrealised_pl_percentage)}%\n'
         result += f'\t\tOpen Position(s) Value:   {self.total_open_position_value:.2f}\n'
         result += f'\t\tOpen Position(s) Cost:   ({self.total_open_position_cost:.2f})\n'
@@ -353,19 +403,20 @@ class PortfolioSummary:
 
         result += f'Equity: {self.equity:.2f} {self.format_change(self.equity_change)}% ' \
                   f'(CAGR: {self.equity_cagr * 100:.2f}%)\n'
-        result += f'\tAccounts Receivable: {self.format_net_value(self.accounts_receivable)}\n'
+        result += f'\tAccounts Receivable: {format_net_value(self.accounts_receivable)}\n'
         result += f'\t\tEquities: {self.total_open_position_value:.2f}\n'
         result += f"\tAvailable Cash: {self.available_cash:.2f}\n"
-        result += f"\t\tNet Contribution: {self.format_net_value(self.net_contribution)}\n"
+        result += f"\t\tNet Contribution: {format_net_value(self.net_contribution)}\n"
         result += f'\t\t\tDeposits:     {self.total_deposits:.2f}\n'
         result += f'\t\t\tWithdrawals: ({self.total_withdrawals:.2f})\n'
-        result += f'\t\tNet Income: {self.format_net_value(self.net_income)}\n'
-        result += f'\t\t\tRevenue: {self.revenue:.2f}\n'
+        result += f'\t\tNet Income: {format_net_value(self.net_income)}\n'
+        result += f'\t\t\tRevenue:   {self.revenue:.2f}\n'
         result += f'\t\t\t\tEquities:     {self.total_closed_position_value:.2f}\n'
         result += f'\t\t\t\tAdjustments:  {self.total_adjustments:.2f}\n'
         result += f'\t\t\t\t\tDividends:         {self.total_dividends_received:.2f}\n'
         result += f'\t\t\t\t\tCash Settlements:  {self.total_cash_settlements_received:.2f}\n'
         result += f'\t\t\tExpenses: ({self.expenses:.2f})\n'
+        result += f'\t\t\t\tTaxes:    ({self.total_taxes_paid:.2f})\n'
         result += f'\t\t\t\tEquities: ({self.total_position_cost:.2f})\n'
         result += f'\t\t\t\t\tOpen Positions:   ({self.total_open_position_cost:.2f})\n'
         result += f'\t\t\t\t\tClosed Positions: ({self.total_closed_position_cost:.2f})\n'
@@ -377,13 +428,174 @@ class PortfolioSummary:
     def format_change(value: float) -> str:
         return f"{'+' if value > 0 else ''}{value:.2f}"
 
+
+# TODO: Report on make-up of taxes (e.g. capital gains from equities vs. dividends).
+class TaxReport:
+    """Calculates and summarises the tax for a given portfolio."""
+
+    # Dividend tax config
+    holding_period_offset = 60
+    holding_period_length = 121
+    min_holding_period = 60
+
+    def __init__(self, tax_year: datetime.datetime, portfolio: Portfolio, db_connection: sqlite3.Connection):
+        """
+        Create a tax report for a given year.
+
+        :param tax_year: The tax year to calculate taxes for.
+        :param portfolio: The portfolio to calculate taxes for.
+        :param db_connection: A database connection that can be used for querying tax rates.
+        """
+        self.start_of_tax_year = datetime.datetime(year=tax_year.year, month=1, day=1)
+        # TODO: Account for milliseconds? Not necessary?
+        self.end_of_tax_year = datetime.datetime(year=tax_year.year, month=12, day=31,
+                                                 hour=23, minute=59, second=59)
+        self.report_date = datetime.datetime(tax_year.year + 1, 4, 15)
+
+        self.portfolio_id = portfolio.id
+
+        cursor = db_connection.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                bracket_threshold AS threshold, 
+                tax_rate AS rate 
+            FROM historical_marginal_tax_rates 
+            WHERE tax_year = ?
+            """,
+            (self.start_of_tax_year,)
+        )
+
+        ordinary_tax_rates = {row['threshold']: row['rate'] for row in cursor}
+
+        cursor.execute(
+            """
+            SELECT 
+                bracket_threshold AS threshold, 
+                tax_rate AS rate 
+            FROM historical_capital_gains_tax_rates 
+            WHERE tax_year = ?
+            """,
+            (self.start_of_tax_year,)
+        )
+
+        capital_gains_tax_rates = {row['threshold']: row['rate'] for row in cursor}
+
+        cursor.execute(
+            """
+            SELECT position_id, timestamp, (quantity * price) AS amount
+            FROM transactions
+            WHERE portfolio_id = ? 
+                AND type = ? 
+                AND ? <= timestamp AND timestamp <= ?
+            """,
+            (portfolio.id, TransactionType.DIVIDEND.value, self.start_of_tax_year, self.end_of_tax_year)
+        )
+
+        dividends_for_tax_year = cursor.fetchall()
+
+        cursor.close()
+
+        self.short_term_capital_gains: float = 0.0
+        self.long_term_capital_gains: float = 0.0
+
+        positions_closed_during_tax_year = filter(
+            lambda p: self.start_of_tax_year <= p.closed_timestamp <= self.end_of_tax_year,
+            portfolio.closed_positions
+        )
+
+        # Capital gains from sale of equities.
+        for position in positions_closed_during_tax_year:
+            if (position.closed_timestamp - position.opened_timestamp).days <= 365:
+                self.short_term_capital_gains += position.realised_pl
+            else:
+                self.long_term_capital_gains += position.realised_pl
+
+        # Capital gains from dividends.
+        for row in dividends_for_tax_year:
+            position = portfolio.positions_by_id[row['position_id']]
+            dividend_date = datetime.datetime.fromisoformat(row['timestamp'])
+
+            dividend_holding_period_end = dividend_date - datetime.timedelta(self.holding_period_offset)
+            dividend_holding_period_start = dividend_holding_period_end - datetime.timedelta(self.holding_period_length)
+
+            if position.opened_timestamp <= dividend_holding_period_end - datetime.timedelta(
+                    self.min_holding_period) and \
+                    (not position.is_closed or (
+                            position.closed_timestamp - position.opened_timestamp).days > self.min_holding_period):
+                # It is qualified dividend
+                self.long_term_capital_gains += row['amount']
+            else:
+                self.short_term_capital_gains += row['amount']
+
+        (self.short_term_capital_gains_tax,
+         self.short_term_gains_tax_by_bracket,
+         self.taxable_short_term_gains_amounts_by_bracket) = \
+            self._calculate_tax(self.short_term_capital_gains, ordinary_tax_rates)
+
+        (self.long_term_capital_gains_tax,
+         self.long_term_gains_tax_by_bracket,
+         self.taxable_long_term_gains_amounts_by_bracket) = \
+            self._calculate_tax(self.long_term_capital_gains, capital_gains_tax_rates)
+
+        self.deductible_losses = min(3000.00, abs(min(0.00, self.net_gains)))
+
+    @property
+    def net_gains(self) -> float:
+        """The total amount of capital gains earned in the tax year."""
+        return self.short_term_capital_gains + self.long_term_capital_gains
+
+    @property
+    def total_tax(self) -> float:
+        """The total amount of tax payable for the tax year."""
+        return self.short_term_capital_gains_tax + self.long_term_capital_gains_tax - self.deductible_losses
+
+    def __str__(self):
+        return f"""
+{self.report_date.date()} Tax Report
+Tax year: {self.start_of_tax_year.date()} - {self.end_of_tax_year.date()} 
+Portfolio ID: {self.portfolio_id} 
+
+Net Income: {format_net_value(self.net_gains)}
+\tShort-Term Capital Gains: {format_net_value(self.short_term_capital_gains)}
+\tLong-Term Capital Gains:  {format_net_value(self.long_term_capital_gains)}
+
+Total Tax Payable: {self.total_tax:.2f}
+\tShort-Term Capital Gains:  {self.short_term_capital_gains_tax:.2f}
+\tLong-Term Capital Gains:   {self.long_term_capital_gains_tax:.2f}
+\tDeductibles:              ({self.deductible_losses:.2f})
+        """
+
     @staticmethod
-    def format_net_value(value: float) -> str:
-        formatted_value = f"{abs(value):.2f}"
+    def _calculate_tax(net_income: float, tax_brackets: Dict[float, float]) \
+            -> Tuple[float, Dict[float, float], Dict[float, float]]:
+        """
+        Calculate the tax due for the given net income and marginal tax rates.
 
-        if value < 0:
-            formatted_value = f"({formatted_value})"
-        else:
-            formatted_value = f" {formatted_value} "
+        :param net_income: The net income for the tax year period.
+        :param tax_brackets: A dictionary mapping the threshold to each bracket to the corresponding tax rate.
+        :return: A 3-tuple containing, in this order: the total amount of tax, the amount of tax by tax bracket and the
+        amount of taxable income by tax bracket.
+        """
+        residual_amount: float = net_income
 
-        return formatted_value
+        total_tax: float = 0.0
+        payable_tax_by_rate: Dict[float, float] = dict()
+        taxable_amounts_by_rate: Dict[float, float] = dict()
+
+        for threshold in sorted(tax_brackets.keys(), reverse=True):
+            rate = tax_brackets[threshold]
+
+            if residual_amount >= threshold:
+                taxable_amount = residual_amount - threshold
+                amount_to_pay = rate * taxable_amount
+                residual_amount -= taxable_amount
+
+                taxable_amounts_by_rate[rate] = taxable_amount
+                payable_tax_by_rate[rate] = amount_to_pay
+                total_tax += amount_to_pay
+            else:
+                taxable_amounts_by_rate[rate] = 0.0
+                payable_tax_by_rate[rate] = 0.0
+
+        return total_tax, payable_tax_by_rate, taxable_amounts_by_rate

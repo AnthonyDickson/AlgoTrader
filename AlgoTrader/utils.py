@@ -186,3 +186,5 @@ def load_ticker_list_json(ticker_list) -> Set[Ticker]:
         raise ValueError("ERROR: Empty ticker list.")
 
     return set(tickers)
+
+

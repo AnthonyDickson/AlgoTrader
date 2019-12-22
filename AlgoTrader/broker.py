@@ -177,6 +177,13 @@ class Broker:
         self.today = now
 
         self._fetch_daily_data()
+        pay_the_taxman_date = datetime.datetime(year=self.today.year, month=4, day=15)
+
+        if self.yesterday < pay_the_taxman_date <= self.today:
+            for portfolio in self.portfolios.values():
+                tax_report = portfolio.generate_tax_report(self.today)
+                self._execute_transaction(TransactionType.TAX, portfolio.id, tax_report.total_tax)
+                print(tax_report)
 
         if str(self.today) in self.spx_changes:
             ticker = self.spx_changes[str(self.today)]['removed']['ticker']
@@ -262,10 +269,13 @@ class Broker:
             portfolio.pay_dividend(price, self.position_by_id[position_id])
         elif transaction_type == TransactionType.CASH_SETTLEMENT:
             portfolio.pay_cash_settlement(price, self.position_by_id[position_id])
+        elif transaction_type == TransactionType.TAX:
+            portfolio.deduct_taxes(price)
 
         if transaction_type in {TransactionType.SELL, TransactionType.DIVIDEND}:
             quantity = self.position_by_id[position_id].quantity
-        elif transaction_type in {TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, TransactionType.CASH_SETTLEMENT}:
+        elif transaction_type in {TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, TransactionType.CASH_SETTLEMENT,
+                                  TransactionType.TAX}:
             quantity = 1
 
         with self.db_connection:

@@ -14,3 +14,4 @@ class TransactionType(enum.Enum):
     SELL = enum.auto()
     DIVIDEND = enum.auto()
     CASH_SETTLEMENT = enum.auto()
+    TAX = enum.auto()

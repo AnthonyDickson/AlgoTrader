@@ -1,37 +1,35 @@
+import datetime
 import sqlite3
-from typing import List, Set, Dict, Optional
+from typing import Set, Optional
 
 from AlgoTrader.exceptions import InsufficientFundsError
 from AlgoTrader.position import Position
-from AlgoTrader.types import PortfolioID, Ticker
+from AlgoTrader.types import PortfolioID, Ticker, TransactionType
 
 
 # TODO: Sync state with database.
 class Portfolio:
 
-    def __init__(self, owner_name: str, db_connection: sqlite3.Connection):
+    def __init__(self, owner_name: str, timestamp: datetime.datetime,
+                 db_connection: sqlite3.Connection):
         self._balance: float = 0.0
         self._contribution: float = 0.0
-
-        self._positions: List[Position] = []
+        self._created_timestamp: datetime.datetime = timestamp
+        self._positions: Set[Position] = set()
+        self._open_positions: Set[Position] = set()
         self._tickers: Set[Ticker] = set()
 
         self._owner_name = owner_name
 
-        self.db_cursor = db_connection.cursor()
+        self.db_connection = db_connection
 
-        with self.db_cursor.connection:
-            self.db_cursor.execute('''
+        with self.db_connection:
+            cursor = self.db_connection.execute('''
                     INSERT INTO portfolio (owner_name) VALUES (?)
                     ''', (self._owner_name,))
 
-        self._id = PortfolioID(self.db_cursor.lastrowid)
-
-    def __del__(self):
-        try:
-            self.db_cursor.close()
-        except sqlite3.ProgrammingError:
-            pass
+            self._id = PortfolioID(cursor.lastrowid)
+            cursor.close()
 
     @property
     def id(self) -> PortfolioID:
@@ -56,28 +54,24 @@ class Portfolio:
         return self._balance
 
     @property
-    def positions(self) -> List[Position]:
+    def positions(self) -> Set[Position]:
         """The list of positions (both open and closed) in this portfolio."""
-        return self._positions[:]
+        return self._positions.copy()
 
     @property
-    def open_positions(self) -> List[Position]:
+    def open_positions(self) -> Set[Position]:
         """The list of open positions in this portfolio."""
-        return list(filter(lambda position: not position.is_closed, self._positions))
-
-    @property
-    def closed_positions(self) -> List[Position]:
-        """The list of closed positions in this portfolio."""
-        return list(filter(lambda position: position.is_closed, self._positions))
+        return self._open_positions.copy()
 
     def sync(self):
         """Sync the portfolio data with the database."""
-        self.db_cursor.execute(
+        cursor = self.db_connection.execute(
             '''SELECT balance FROM portfolio_balance WHERE portfolio_id = ?''',
             (self.id,)
         )
 
-        new_balance = self.db_cursor.fetchone()['balance']
+        new_balance = cursor.fetchone()['balance']
+        cursor.close()
 
         # TODO: Fix database and local balances diverging due to different floating point precision...
         # assert abs(self._balance - new_balance) < sys.float_info.epsilon, \
@@ -85,50 +79,54 @@ class Portfolio:
 
         self._balance = new_balance
 
-    def open_position(self, ticker: Ticker, price: float, quantity: int) -> Position:
+    def open_position(self, ticker: Ticker, price: float, quantity: int,
+                      timestamp: datetime.datetime) -> Position:
         """
         Open a position and add it to this portfolio.
 
         :param ticker: The ticker of the security that is being bought.
         :param price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
+        :param timestamp: When the position is being opened.
         :return: The opened position.
         :raises InsufficientFundsError: if there is not enough funds to open the given position.
         """
         # Deduct cost first to ensure that the account has enough funds (it will raise an exception if it doesn't).
         self._deduct(price * quantity)
 
-        position = Position(self.id, ticker, price, quantity, self.db_cursor.connection)
+        position = Position(self.id, ticker, price, quantity, timestamp,
+                            self.db_connection)
 
-        self._positions.append(position)
         self._tickers.add(position.ticker)
+        self._positions.add(position)
+        self._open_positions.add(position)
 
         return position
 
-    def close_position(self, position: Position, price: float):
+    def close_position(self, position: Position, price: float,
+                       timestamp: datetime.datetime):
         """
         Close the given position at the given price.
         :param position: The position to close.
         :param price: The current price of the security the position covers.
+        :param timestamp: When the position is being closed.
         :raises AssertionError: if the position was not added to the portfolio.
         """
         assert position in self.positions, 'Cannot close a position that does not belong to this portfolio.'
 
-        self._balance += position.close(price)
+        self._balance += position.close(price, timestamp)
+        self._open_positions.discard(position)
 
     # TODO: Only use transactions up to and including given date when giving report.
-    def print_summary(self, stock_prices: Dict[Ticker, float], ticker: Optional[Ticker] = None):
+    def print_summary(self, period_end: datetime.datetime,
+                      period_start: Optional[datetime.datetime] = None):
         """
         Print a summary of the portfolio.
-        :param stock_prices: The current prices of the stocks that this portfolio has positions in.
-        :param ticker: (optional) If a ticker is specified, then a summary just for the positions for that ticker will
-        be printed.
+        :param period_end: The last date that is included in the reporting period.
+        :param period_start: (optional) The first date that is included in the reporting period. If not specified, then
+        the created_timestamp for when the portfolio was created will be used.
         """
-        if ticker is not None:
-            print(TickerPositionSummary(ticker, self, stock_prices[ticker]))
-            return
-
-        print(PortfolioSummary(self, stock_prices))
+        print(PortfolioSummary(self, self.db_connection, period_end, period_start))
 
     def deposit(self, amount: float):
         """
@@ -191,68 +189,9 @@ class Portfolio:
         else:
             self._balance -= amount
 
-
-# TODO: Update to use data from database.
-# TODO: Upload reports to database.
-class TickerPositionSummary:
-    """Summary report for all positions for a given ticker."""
-
-    def __init__(self, ticker: Ticker, portfolio: Portfolio, stock_price: float):
-        """
-        Create a summary of positions for a given security.
-        :param ticker: The ticker of the security to report on.
-        :param portfolio: The portfolio that contains the positions.
-        :param stock_price: The current stock price for the given security.
-        """
-        self.ticker = ticker
-        self.total_num_closed_positions: float = 0.0
-        self.total_num_open_positions: float = 0.0
-        self.total_closed_position_cost: float = 0.0
-        self.total_closed_position_value: float = 0.0
-        self.realised_pl: float = 0.0
-        self.total_num_closed_positions: float = 0.0
-        self.total_open_position_cost: float = 0.0
-        self.total_open_position_value: float = 0.0
-        self.unrealised_pl: float = 0.0
-        self.total_dividends_received: float = 0.0
-        self.total_cash_settlements_received: float = 0.0
-
-        for position in portfolio.positions:
-            if position.is_closed:
-                self.total_num_closed_positions += 1
-                self.total_closed_position_cost += position.cost
-                self.total_closed_position_value += position.exit_value
-                self.realised_pl += position.realised_pl
-            else:
-                self.total_num_open_positions += 1
-                self.total_open_position_cost += position.cost
-                self.total_open_position_value += position.current_value(stock_price)
-                self.unrealised_pl += position.unrealised_pl(stock_price)
-
-            self.total_dividends_received += position.dividends_received
-            self.total_cash_settlements_received += position.cash_settlements_received
-
-        self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
-        self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
-        self.total_position_value = self.total_open_position_value + self.total_closed_position_value
-        self.total_adjustments = self.total_dividends_received + self.total_cash_settlements_received
-        self.net_pl = self.realised_pl + self.unrealised_pl
-
-        try:
-            self.net_pl_percentage = self.net_pl / self.total_position_cost * 100
-        except ZeroDivisionError:
-            self.net_pl_percentage = 0.0
-
-    def __str__(self) -> str:
-        ticker_prefix = f'[{self.ticker}]'
-
-        return (
-            f'{ticker_prefix:6s} P/L: {self.net_pl_percentage:.2f}% '
-            f'({self.net_pl:.2f}) ({self.realised_pl:.2f} realised, {self.unrealised_pl:.2f} unrealised)'
-            f' - Adjustments: {self.total_adjustments:.2f} '
-            f'({self.total_dividends_received:.2f} from dividends, '
-            f'{self.total_cash_settlements_received:.2f} from cash settlements)'
-        )
+    @property
+    def created_timestamp(self):
+        return self._created_timestamp
 
 
 # TODO: Update to use data from database.
@@ -262,12 +201,68 @@ class TickerPositionSummary:
 class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
 
-    def __init__(self, portfolio: Portfolio, stock_prices: Dict[Ticker, float]):
+    def __init__(self, portfolio: Portfolio, db_connection: sqlite3.Connection, period_end: datetime.datetime,
+                 period_start: Optional[datetime.datetime] = None):
         """
         Create a summary report of a portfolio.
         :param portfolio: The portfolio to report on.
-        :param stock_prices: The current prices of the securities present in the given portfolio.
+        :param db_connection: A database connection that can be used to query for stock price and transaction data.
+        :param period_end: The lsat date that is included in the reporting period.
+        :param period_start: (optional) The first date that is included in the reporting period. If not specified, then
+        the created_timestamp for when the portfolio was created will be used.
         """
+        if period_start is None:
+            period_start = portfolio.created_timestamp
+
+        cursor = db_connection.execute(
+            f'''
+            SELECT ticker, close, MAX(datetime)
+            FROM daily_stock_data
+            WHERE ? <= datetime AND datetime <= ?
+            GROUP BY ticker;
+            ''',
+            (period_start, period_end,)
+        )
+
+        stock_prices = {row['ticker']: row['close'] for row in cursor}
+        cursor.close()
+
+        self.total_deposits: float = 0.0
+        self.total_withdrawals: float = 0.0
+        self.total_dividends_received: float = 0.0
+        self.total_cash_settlements_received: float = 0.0
+
+        cursor = db_connection.execute(
+            f"""
+            SELECT type, SUM(price * quantity) AS total
+            FROM transactions 
+            WHERE portfolio_id = ? AND ? <= timestamp AND timestamp <= ? AND type IN (?, ?, ?, ?)
+            GROUP BY type;
+            """,
+            (portfolio.id, period_start, period_end,
+             TransactionType.DEPOSIT.value, TransactionType.WITHDRAWAL.value,
+             TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value)
+        )
+
+        for row in cursor:
+            if row['type'] == TransactionType.DEPOSIT.value:
+                self.total_deposits = row['total']
+            elif row['type'] == TransactionType.WITHDRAWAL.value:
+                self.total_withdrawals = row['total']
+            elif row['type'] == TransactionType.DIVIDEND.value:
+                self.total_dividends_received = row['total']
+            elif row['type'] == TransactionType.CASH_SETTLEMENT.value:
+                self.total_cash_settlements_received = row['total']
+            else:
+                raise ValueError(f"Got unexpected type from totals query: {row['type']}.")
+
+        cursor.close()
+
+        self.date_created = portfolio.created_timestamp
+        self.period_start = period_start
+        self.period_end = period_end
+        self.portfolio_age: float = (self.period_end - self.date_created).days / 365.25
+
         self.total_num_closed_positions: float = 0.0
         self.total_num_open_positions: float = 0.0
         self.total_closed_position_cost: float = 0.0
@@ -277,19 +272,9 @@ class PortfolioSummary:
         self.total_open_position_cost: float = 0.0
         self.total_open_position_value: float = 0.0
         self.unrealised_pl: float = 0.0
-        self.total_dividends_received: float = 0.0
-        self.total_cash_settlements_received: float = 0.0
 
         for position in portfolio.positions:
-            self.total_dividends_received += position.dividends_received
-            self.total_cash_settlements_received += position.cash_settlements_received
-
-            if position.is_closed:
-                self.total_num_closed_positions += 1
-                self.total_closed_position_cost += position.cost
-                self.total_closed_position_value += position.exit_value
-                self.realised_pl += position.realised_pl
-            else:
+            if not position.is_closed and position.opened_timestamp >= self.period_start:
                 self.total_num_open_positions += 1
                 self.total_open_position_cost += position.cost
 
@@ -300,6 +285,11 @@ class PortfolioSummary:
                     self.unrealised_pl += position.unrealised_pl(stock_price)
                 except KeyError:
                     print(f'WARNING: Missing stock prices for {position.ticker}.')
+            elif position.is_closed and position.closed_timestamp <= self.period_end:
+                self.total_num_closed_positions += 1
+                self.total_closed_position_cost += position.cost
+                self.total_closed_position_value += position.exit_value
+                self.realised_pl += position.realised_pl
 
         self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
@@ -330,18 +320,17 @@ class PortfolioSummary:
         self.expenses = self.total_position_cost
         self.net_income = self.revenue - self.expenses
 
-        self.cash_debit = portfolio.contribution
-        # TODO: Track withdrawals amount.
-        self.cash_credit: float = 0.0
-        self.net_contribution = self.cash_debit - self.cash_credit
+        self.net_contribution = self.total_deposits - self.total_withdrawals
 
         # TODO: Include dividends receivable once ex-dividend date data is available.
         self.accounts_receivable = self.total_open_position_value
 
-        self.assets = self.net_contribution + self.accounts_receivable + self.net_income
+        self.available_cash = self.net_contribution + self.net_income
+        self.assets = self.accounts_receivable + self.available_cash
 
         self.equity = self.assets
-        self.equity_change = (self.equity / self.net_contribution * 100) - 100
+        self.equity_change = (self.equity / self.total_deposits * 100) - 100
+        self.equity_cagr = (self.equity / self.total_deposits) ** (1 / self.portfolio_age) - 1
 
     def __str__(self) -> str:
         result = ''
@@ -353,31 +342,33 @@ class PortfolioSummary:
 
         result += f'Net P&L: {self.format_net_value(self.net_pl)} {self.format_change(self.net_pl_percentage)}%\n'
         result += f'\tRealised P&L:   {self.format_net_value(self.net_realised_pl)} ' \
-            f'{self.format_change(self.net_realised_pl_percentage)}%\n'
+                  f'{self.format_change(self.net_realised_pl_percentage)}%\n'
         result += f'\t\tClosed Position(s) Value: {self.total_closed_position_value:.2f}\n'
         result += f'\t\tClosed Position(s) Cost: ({self.total_closed_position_cost:.2f})\n'
         result += f'\tUnrealised P&L: {self.format_net_value(self.net_unrealised_pl)} ' \
-            f'{self.format_change(self.net_unrealised_pl_percentage)}%\n'
+                  f'{self.format_change(self.net_unrealised_pl_percentage)}%\n'
         result += f'\t\tOpen Position(s) Value:   {self.total_open_position_value:.2f}\n'
         result += f'\t\tOpen Position(s) Cost:   ({self.total_open_position_cost:.2f})\n'
         result += '\n'
 
-        result += f'Equity: {self.equity:.2f} {self.format_change(self.equity_change)}%\n'
+        result += f'Equity: {self.equity:.2f} {self.format_change(self.equity_change)}% ' \
+                  f'(CAGR: {self.equity_cagr * 100:.2f}%)\n'
         result += f'\tAccounts Receivable: {self.format_net_value(self.accounts_receivable)}\n'
-        result += f'\t\tEquities:     {self.total_open_position_value:.2f}\n'
-        result += f'\tCash:                {self.format_net_value(self.net_contribution)}\n'
-        result += f'\t\tDeposits:     {self.cash_debit:.2f}\n'
-        result += f'\t\tWithdrawals: ({self.cash_credit:.2f})\n'
-        result += f'\tNet Income:          {self.format_net_value(self.net_income)}\n'
-        result += f'\t\tRevenue:      {self.revenue:.2f}\n'
-        result += f'\t\t\tEquities:     {self.total_closed_position_value:.2f}\n'
-        result += f'\t\t\tAdjustments:  {self.total_adjustments:.2f}\n'
-        result += f'\t\t\t\tDividends:         {self.total_dividends_received:.2f}\n'
-        result += f'\t\t\t\tCash Settlements:  {self.total_cash_settlements_received:.2f}\n'
-        result += f'\t\tExpenses:    ({self.expenses:.2f})\n'
-        result += f'\t\t\tEquities:    ({self.total_position_cost:.2f})\n'
-        result += f'\t\t\t\tOpen Positions:   ({self.total_open_position_cost:.2f})\n'
-        result += f'\t\t\t\tClosed Positions: ({self.total_closed_position_cost:.2f})\n'
+        result += f'\t\tEquities: {self.total_open_position_value:.2f}\n'
+        result += f"\tAvailable Cash: {self.available_cash:.2f}\n"
+        result += f"\t\tNet Contribution: {self.format_net_value(self.net_contribution)}\n"
+        result += f'\t\t\tDeposits:     {self.total_deposits:.2f}\n'
+        result += f'\t\t\tWithdrawals: ({self.total_withdrawals:.2f})\n'
+        result += f'\t\tNet Income: {self.format_net_value(self.net_income)}\n'
+        result += f'\t\t\tRevenue: {self.revenue:.2f}\n'
+        result += f'\t\t\t\tEquities:     {self.total_closed_position_value:.2f}\n'
+        result += f'\t\t\t\tAdjustments:  {self.total_adjustments:.2f}\n'
+        result += f'\t\t\t\t\tDividends:         {self.total_dividends_received:.2f}\n'
+        result += f'\t\t\t\t\tCash Settlements:  {self.total_cash_settlements_received:.2f}\n'
+        result += f'\t\t\tExpenses: ({self.expenses:.2f})\n'
+        result += f'\t\t\t\tEquities: ({self.total_position_cost:.2f})\n'
+        result += f'\t\t\t\t\tOpen Positions:   ({self.total_open_position_cost:.2f})\n'
+        result += f'\t\t\t\t\tClosed Positions: ({self.total_closed_position_cost:.2f})\n'
         result += '\n'
 
         return result

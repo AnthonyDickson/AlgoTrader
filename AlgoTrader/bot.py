@@ -109,7 +109,7 @@ class MACDBot(TradingBotABC):
 
     def update(self, today: datetime.datetime):
         if str(today) in self.historical_tickers:
-            self._tickers.update(self.historical_tickers[str(today)])
+            self._tickers = self.historical_tickers[str(today)].copy()
 
         for ticker in self.tickers:
             try:

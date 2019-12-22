@@ -8,7 +8,7 @@ DROP INDEX IF EXISTS "position_portfolio_id_index";
 DROP INDEX IF EXISTS "transactions_portfolio_id_index";
 DROP INDEX IF EXISTS "transactions_portfolio_id_type_index";
 DROP INDEX IF EXISTS "transactions_position_id_index";
-DROP INDEX IF EXISTS "daily_stock_data_divedend_amount_index";
+DROP INDEX IF EXISTS "daily_stock_data_dividend_amount_index";
 DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
 DROP INDEX IF EXISTS "daily_stock_data_ticker_index";
 DROP TRIGGER IF EXISTS "transactions_position_id_on_update";

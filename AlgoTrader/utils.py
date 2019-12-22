@@ -105,10 +105,12 @@ def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yea
     :param yearly_contribution: How much cash gets added to the bot's portfolio at the start of each year.
     :param db_connection: A connection to a database that can be queried for daily stock data.
     """
-    db_cursor = db_connection.cursor()
-
-    db_cursor.execute('SELECT DISTINCT datetime FROM daily_stock_data ORDER BY datetime;')
-    dates = list(map(lambda row: row['datetime'], db_cursor.fetchall()))
+    dates = list(
+        map(
+            lambda row: row['datetime'],
+            db_connection.execute('SELECT DISTINCT datetime FROM daily_stock_data ORDER BY datetime;')
+        )
+    )
 
     yesterday = datetime.datetime.fromisoformat(dates[0])
 
@@ -143,8 +145,6 @@ def main_loop(bot: ITradingBot, broker: Broker, initial_contribution: float, yea
         yesterday = today
 
     broker.print_report(bot.portfolio_id, yesterday)
-
-    db_cursor.close()
 
 
 def load_ticker_list(ticker_list) -> Set[Ticker]:

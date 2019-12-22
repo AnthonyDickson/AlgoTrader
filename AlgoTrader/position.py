@@ -1,5 +1,6 @@
+import datetime
 import sqlite3
-from typing import Tuple
+from typing import Tuple, Optional
 
 from AlgoTrader.types import PortfolioID, Ticker, PositionID
 
@@ -8,7 +9,9 @@ from AlgoTrader.types import PortfolioID, Ticker, PositionID
 # TODO: Use database data to calculate stats.
 class Position:
 
-    def __init__(self, portfolio_id: PortfolioID, ticker: Ticker, entry_price: float, quantity: int,
+    def __init__(self, portfolio_id: PortfolioID, ticker: Ticker,
+                 entry_price: float, quantity: int,
+                 open_timestamp: datetime.datetime,
                  db_connection: sqlite3.Connection):
         """
         Enter a new position (buy an amount of a security).
@@ -17,6 +20,7 @@ class Position:
         :param ticker: The ticker of the security that is being bought.
         :param entry_price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
+        :param open_timestamp: When this position is being opened.
         :param db_connection: A connection to a database that can be queried for data on positions.
         """
         assert quantity >= 1, 'Cannot open a position with less than one share.'
@@ -26,27 +30,21 @@ class Position:
         self._quantity: int = quantity
         self._entry_price: float = entry_price
         self._exit_price: float = 0.0
+        self._opened_timestamp: datetime.datetime = open_timestamp
+        self._closed_timestamp: Optional[datetime.datetime] = None
         self._dividends_received = 0.00
         self._cash_settlements_received = 0.00
         self._pl_realised: float = 0.0
-        self._pl_unrealised: float = 0.0
         self._is_closed: bool = False
 
-        self.db_cursor = db_connection.cursor()
-        self.db_cursor.execute(
-            "INSERT INTO position (portfolio_id, ticker) VALUES (?, ?)",
-            (self.portfolio_id, self.ticker,)
-        )
+        with db_connection:
+            cursor = db_connection.execute(
+                "INSERT INTO position (portfolio_id, ticker) VALUES (?, ?)",
+                (self.portfolio_id, self.ticker,)
+            )
 
-        self._id = PositionID(self.db_cursor.lastrowid)
-
-        self.db_cursor.connection.commit()
-
-    def __del__(self):
-        try:
-            self.db_cursor.close()
-        except sqlite3.ProgrammingError:
-            pass
+            self._id = PositionID(cursor.lastrowid)
+            cursor.close()
 
     @property
     def id(self) -> PositionID:
@@ -64,9 +62,21 @@ class Position:
 
     @property
     def is_closed(self) -> bool:
-        """ Whether the position is closed or not (i.e. still open).
-        """
+        """Whether the position is closed or not (i.e. still open)."""
         return self._is_closed
+
+    @property
+    def opened_timestamp(self) -> datetime.datetime:
+        """The period_end indicating when this position was opened."""
+        return self._opened_timestamp
+
+    @property
+    def closed_timestamp(self) -> Optional[datetime.datetime]:
+        """
+        The period_end indicating when this position was closed.
+        Note: This will be None if the position is still open.
+        """
+        return self._closed_timestamp
 
     @property
     def entry_price(self) -> float:
@@ -100,10 +110,6 @@ class Position:
         """How much this position has earned in dividends."""
         return self._dividends_received
 
-    @dividends_received.setter
-    def dividends_received(self, value: float):
-        self._dividends_received = value
-
     @property
     def cash_settlements_received(self) -> float:
         """How much this position has received in cash settlements."""
@@ -122,7 +128,7 @@ class Position:
     @property
     def realised_pl(self) -> float:
         """The realised profit and loss of the position."""
-        return self._pl_realised + self.cash_settlements_received
+        return (self.exit_value - self.entry_value) + self.cash_settlements_received
 
     def unrealised_pl(self, current_price) -> float:
         """
@@ -131,12 +137,7 @@ class Position:
         :param current_price: The current price of the security this position is invested in.
         :return: the unrealised profit and loss of the position
         """
-        assert self.is_closed is False, \
-            'Cannot get the unrealised P&L of a closed position. Use `pl_realised()` instead.'
-
-        self._pl_unrealised = self._quantity * (current_price - self._entry_price)
-
-        return self._pl_unrealised
+        return self._quantity * (current_price - self._entry_price)
 
     def current_value(self, current_price) -> float:
         """
@@ -145,8 +146,6 @@ class Position:
         :param current_price: The current price of the security that this position is invested in.
         :return: the current value of the position.
         """
-        assert self.is_closed is False, 'Cannot check current value on a closed position, use `exit_value` instead.'
-
         return self.quantity * current_price
 
     def adjust_for_dividend(self, dividend_per_share: float):
@@ -185,19 +184,20 @@ class Position:
 
         return whole_shares, fractional_shares, adjusted_price, cash_settlement_amount
 
-    def close(self, price: float) -> float:
+    def close(self, price: float, timestamp: datetime.datetime) -> float:
         """
         Close this position.
 
         :param price: The price of the security that this position is invested in at the time of closing.
+        :param timestamp: The time (and date) that the position is being closed at.
         :return: The value that the position closed at.
         """
         assert self._is_closed is not True, "Attempt to close a position that has already been closed."
 
         self._exit_price = price
         self._pl_realised = self._quantity * (self._exit_price - self._entry_price)
-        self._pl_unrealised = 0.0
         self._is_closed = True
+        self._closed_timestamp = timestamp
 
         return self.exit_value
 

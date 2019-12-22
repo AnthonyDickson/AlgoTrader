@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS "transactions_position_id_index" ON "transactions" (
                                                                                "position_id"
     );
 
-CREATE INDEX IF NOT EXISTS "daily_stock_data_divedend_amount_index" ON "daily_stock_data" (
+CREATE INDEX IF NOT EXISTS "daily_stock_data_dividend_amount_index" ON "daily_stock_data" (
                                                                                            "dividend_amount" DESC
     );
 

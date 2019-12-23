@@ -68,6 +68,42 @@ CREATE TABLE IF NOT EXISTS "daily_stock_data"
     PRIMARY KEY ("ticker", "datetime")
 );
 
+CREATE TABLE IF NOT EXISTS "portfolio_report"
+(
+    "id"                           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+    "portfolio_id"                 INTEGER NOT NULL,
+    "report_date"                  TEXT    NOT NULL,
+    "net_pl"                       REAL    NOT NULL,
+    "net_pl_percentage"            REAL    NOT NULL,
+    "realised_pl"                  REAL    NOT NULL,
+    "realised_pl_percentage"       REAL    NOT NULL,
+    "closed_position_value"        REAL    NOT NULL,
+    "closed_position_cost"         REAL    NOT NULL,
+    "unrealised_pl"                REAL    NOT NULL,
+    "unrealised_pl_percentage"     REAL    NOT NULL,
+    "open_position_value"          REAL    NOT NULL,
+    "open_position_cost"           REAL    NOT NULL,
+    "equity"                       REAL    NOT NULL,
+    "equity_change"                REAL    NOT NULL,
+    "cagr"                         REAL    NOT NULL,
+    "accounts_receivable"          REAL    NOT NULL,
+    "accounts_receivable_equities" REAL    NOT NULL,
+    "available_cash"               REAL    NOT NULL,
+    "net_contribution"             REAL    NOT NULL,
+    "deposits"                     REAL    NOT NULL,
+    "withdrawals"                  REAL    NOT NULL,
+    "net_income"                   REAL    NOT NULL,
+    "revenue"                      REAL    NOT NULL,
+    "revenue_equities"             REAL    NOT NULL,
+    "adjustments"                  REAL    NOT NULL,
+    "dividends"                    REAL    NOT NULL,
+    "cash_settlements"             REAL    NOT NULL,
+    "expenses"                     REAL    NOT NULL,
+    "taxes"                        REAL    NOT NULL,
+    "expenses_equities"            REAL    NOT NULL,
+    FOREIGN KEY ("portfolio_id") REFERENCES "portfolio" ("id") ON UPDATE CASCADE ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS "transactions_position_id_type_index" ON "transactions" ("position_id", "type");
 
 CREATE INDEX IF NOT EXISTS "position_portfolio_id_index" ON "position" ("portfolio_id");

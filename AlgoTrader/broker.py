@@ -305,15 +305,17 @@ class Broker:
         if transaction_type == TransactionType.BUY:
             assert ticker is not None, 'A ticker must be specified for a buy order.'
 
-    # TODO: Upload reports to database. This will allow for easy creation of plots such as equity vs. time. It also
-    #  avoids creating slow views on the database side.
     def print_report(self, portfolio_id: PortfolioID, date: datetime.datetime):
         """
-        Print a summary report of the given portfolio.
+        Print and save a summary report of the given portfolio.
 
         :param portfolio_id: The ID of the portfolio to report on.
         :param date: The date the report was requested for. This affects the stock prices used in the valuation.
         """
         portfolio = self.portfolios[portfolio_id]
         portfolio.sync()
-        portfolio.print_summary(date)
+
+        summary = portfolio.create_summary(date)
+        summary.upload()
+
+        print(summary)

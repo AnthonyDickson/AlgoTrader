@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS "transaction_type";
 DROP TABLE IF EXISTS "historical_marginal_tax_rates";
 DROP TABLE IF EXISTS "historical_capital_gains_tax_rates";
 DROP TABLE IF EXISTS "daily_stock_data";
+DROP TABLE IF EXISTS "portfolio_report";
 DROP INDEX IF EXISTS "transactions_position_id_type_index";
 DROP INDEX IF EXISTS "position_portfolio_id_index";
 DROP INDEX IF EXISTS "transactions_portfolio_id_index";

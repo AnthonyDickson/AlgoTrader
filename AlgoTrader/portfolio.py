@@ -138,16 +138,16 @@ class Portfolio:
         self._open_positions.discard(position)
         self._closed_positions.add(position)
 
-    # TODO: Only use transactions up to and including given date when giving report.
-    def print_summary(self, period_end: datetime.datetime,
-                      period_start: Optional[datetime.datetime] = None):
+    def create_summary(self, period_end: datetime.datetime,
+                       period_start: Optional[datetime.datetime] = None) -> 'PortfolioSummary':
         """
-        Print a summary of the portfolio.
+        Create a summary of the portfolio.
+
         :param period_end: The last date that is included in the reporting period.
         :param period_start: (optional) The first date that is included in the reporting period. If not specified, then
         the created_timestamp for when the portfolio was created will be used.
         """
-        print(PortfolioSummary(self, self.db_connection, period_end, period_start))
+        return PortfolioSummary(self, self.db_connection, period_end, period_start)
 
     def generate_tax_report(self, report_date: datetime.datetime) -> 'TaxReport':
         """
@@ -243,8 +243,8 @@ class Portfolio:
 
 # TODO: Update to use data from database.
 # TODO: Calculate unrealised and net p&L using transaction data.
-# TODO: Upload reports to database.
 # TODO: Include YoY P&L - this can be done by reading transaction data.
+# TODO: Allow for summaries to be loaded from database.
 class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
 
@@ -308,7 +308,10 @@ class PortfolioSummary:
 
         cursor.close()
 
+        self.db_connection = db_connection
+
         self.date_created = portfolio.created_timestamp
+        self.portfolio_id = portfolio.id
         self.period_start = period_start
         self.period_end = period_end
         self.portfolio_age: float = (self.period_end - self.date_created).days / 365.25
@@ -317,11 +320,9 @@ class PortfolioSummary:
         self.total_num_open_positions: float = 0.0
         self.total_closed_position_cost: float = 0.0
         self.total_closed_position_value: float = 0.0
-        self.realised_pl: float = 0.0
         self.total_num_closed_positions: float = 0.0
         self.total_open_position_cost: float = 0.0
         self.total_open_position_value: float = 0.0
-        self.unrealised_pl: float = 0.0
 
         for position in portfolio.positions:
             if not position.is_closed and position.opened_timestamp >= self.period_start:
@@ -332,14 +333,12 @@ class PortfolioSummary:
                     stock_price = stock_prices[position.ticker]
 
                     self.total_open_position_value += position.current_value(stock_price)
-                    self.unrealised_pl += position.unrealised_pl(stock_price)
                 except KeyError:
                     print(f'WARNING: Missing stock prices for {position.ticker}.')
             elif position.is_closed and position.closed_timestamp <= self.period_end:
                 self.total_num_closed_positions += 1
                 self.total_closed_position_cost += position.cost
                 self.total_closed_position_value += position.exit_value
-                self.realised_pl += position.realised_pl
 
         self.total_num_positions = self.total_num_open_positions + self.total_num_closed_positions
         self.total_position_cost = self.total_open_position_cost + self.total_closed_position_cost
@@ -381,6 +380,80 @@ class PortfolioSummary:
         self.equity = self.assets
         self.equity_change = (self.equity / self.total_deposits * 100) - 100
         self.equity_cagr = (self.equity / self.total_deposits) ** (1 / self.portfolio_age) - 1
+
+    def upload(self):
+        """Upload the report to the database."""
+        with self.db_connection:
+            self.db_connection.execute(
+                """
+                INSERT INTO portfolio_report (
+                    report_date, 
+                    portfolio_id,
+                    net_pl, 
+                    net_pl_percentage, 
+                    realised_pl, 
+                    realised_pl_percentage, 
+                    closed_position_value, 
+                    closed_position_cost, 
+                    unrealised_pl, 
+                    unrealised_pl_percentage, 
+                    open_position_value, 
+                    open_position_cost, 
+                    equity, 
+                    equity_change, 
+                    cagr, 
+                    accounts_receivable, 
+                    accounts_receivable_equities, 
+                    available_cash, 
+                    net_contribution, 
+                    deposits, 
+                    withdrawals, 
+                    net_income, 
+                    revenue, 
+                    revenue_equities, 
+                    adjustments,
+                    dividends, 
+                    cash_settlements, 
+                    expenses, 
+                    taxes, 
+                    expenses_equities
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (self.period_end,
+                 self.portfolio_id,
+                 self.net_pl,
+                 self.net_pl_percentage,
+                 self.net_realised_pl,
+                 self.net_realised_pl_percentage,
+                 self.total_closed_position_value,
+                 self.total_closed_position_cost,
+                 self.net_unrealised_pl,
+                 self.net_unrealised_pl_percentage,
+                 self.total_open_position_value,
+                 self.total_open_position_cost,
+                 self.equity,
+                 self.equity_change,
+                 self.equity_cagr,
+                 self.accounts_receivable,
+                 self.total_open_position_value,
+                 self.available_cash,
+                 self.net_contribution,
+                 self.total_deposits,
+                 self.total_withdrawals,
+                 self.net_income,
+                 self.revenue,
+                 self.total_closed_position_value,
+                 self.total_adjustments,
+                 self.total_dividends_received,
+                 self.total_cash_settlements_received,
+                 self.expenses,
+                 self.total_taxes_paid,
+                 self.total_position_cost
+                 )
+            )
 
     def __str__(self) -> str:
         result = ''
@@ -517,7 +590,6 @@ class TaxReport:
             dividend_date = datetime.datetime.fromisoformat(row['timestamp'])
 
             dividend_holding_period_end = dividend_date - datetime.timedelta(self.holding_period_offset)
-            dividend_holding_period_start = dividend_holding_period_end - datetime.timedelta(self.holding_period_length)
 
             if position.opened_timestamp <= dividend_holding_period_end - datetime.timedelta(
                     self.min_holding_period) and \

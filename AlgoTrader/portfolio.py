@@ -17,10 +17,10 @@ class Portfolio:
         self._contribution: float = 0.0
         self._taxes_paid: float = 0.0
         self._created_timestamp: datetime.datetime = timestamp
-        self._positions: Set[Position] = set()
-        self._open_positions: Set[Position] = set()
-        self._closed_positions: Set[Position] = set()
-        self._positions_by_id: Dict[PositionID, Position] = dict()
+        self.positions: Set[Position] = set()
+        self.open_positions: Set[Position] = set()
+        self.closed_positions: Set[Position] = set()
+        self.positions_by_id: Dict[PositionID, Position] = dict()
         self._tickers: Set[Ticker] = set()
 
         self._owner_name = owner_name
@@ -62,26 +62,6 @@ class Portfolio:
         """The available amount of cash."""
         return self._balance
 
-    @property
-    def positions(self) -> Set[Position]:
-        """The list of positions (both open and closed) in this portfolio."""
-        return self._positions.copy()
-
-    @property
-    def open_positions(self) -> Set[Position]:
-        """The set of open positions in this portfolio."""
-        return self._open_positions.copy()
-
-    @property
-    def closed_positions(self) -> Set[Position]:
-        """The list of closed positions in this portfolio."""
-        return self._closed_positions.copy()
-
-    @property
-    def positions_by_id(self) -> Dict[PositionID, Position]:
-        """A dictionary mapping position IDs to positions in this portfolio."""
-        return self._positions_by_id.copy()
-
     def sync(self):
         """Sync the portfolio data with the database."""
         cursor = self.db_connection.execute(
@@ -99,7 +79,7 @@ class Portfolio:
         self._balance = new_balance
 
     def open_position(self, ticker: Ticker, price: float, quantity: int,
-                      timestamp: datetime.datetime) -> Position:
+                      timestamp: datetime.datetime, position_id: Optional[PositionID] = None) -> Position:
         """
         Open a position and add it to this portfolio.
 
@@ -107,19 +87,27 @@ class Portfolio:
         :param price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
         :param timestamp: When the position is being opened.
+        :param position_id: (optional) If specified, creates the position using this ID (rather than inferring it).
         :return: The opened position.
         :raises InsufficientFundsError: if there is not enough funds to open the given position.
         """
         # Deduct cost first to ensure that the account has enough funds (it will raise an exception if it doesn't).
         self._deduct(price * quantity)
 
-        position = Position(self.id, ticker, price, quantity, timestamp,
-                            self.db_connection)
+        position = Position(
+            self.id,
+            ticker,
+            price,
+            quantity,
+            timestamp,
+            self.db_connection if position_id is None else None,
+            position_id
+        )
 
         self._tickers.add(position.ticker)
-        self._positions.add(position)
-        self._open_positions.add(position)
-        self._positions_by_id[position.id] = position
+        self.positions.add(position)
+        self.open_positions.add(position)
+        self.positions_by_id[position.id] = position
 
         return position
 
@@ -135,8 +123,8 @@ class Portfolio:
         assert position in self.positions, 'Cannot close a position that does not belong to this portfolio.'
 
         self._balance += position.close(price, timestamp)
-        self._open_positions.discard(position)
-        self._closed_positions.add(position)
+        self.open_positions.discard(position)
+        self.closed_positions.add(position)
 
     def create_summary(self, period_end: datetime.datetime,
                        period_start: Optional[datetime.datetime] = None) -> 'PortfolioSummary':
@@ -213,6 +201,30 @@ class Portfolio:
         self._pay(amount)
         position.cash_settlements_received += amount
 
+    def pay_for_buy_order(self, amount: float):
+        """
+        Pay for a (unfilled) buy order in advance.
+
+        Note:
+        - This is mainly used for batch orders where the creation of positions for buy orders are deferred.
+        - If a buy order is going to filled straight away (i.e not issuing batch orders) then you should NOT call this
+        method or the portfolio will be double charged.
+
+        :param amount: The total price/cost of the buy order.
+        """
+        self._deduct(amount)
+
+    def refund_unfilled_buy_order(self, amount: float):
+        """
+        Refund the amount of cash paid upfront for a buy order that was not filled straight away.
+
+        Note:
+        - This is mainly used for batch orders where the creation of positions for buy orders are deferred.
+
+        :param amount: The amount to refund to the account.
+        """
+        self._pay(amount)
+
     def _pay(self, amount: float):
         """
         Add an amount of cash to the balance of this portfolio.
@@ -223,7 +235,6 @@ class Portfolio:
             raise ValueError(f'Cannot add negative amount {amount} to balance.')
         elif amount > 0:
             self._balance += amount
-            self.should_fetch_new_balance = True
 
     def _deduct(self, amount: float):
         """
@@ -259,19 +270,29 @@ class PortfolioSummary:
         the created_timestamp for when the portfolio was created will be used.
         """
         if period_start is None:
+            cursor = db_connection.execute(
+                f'''
+                SELECT ticker, close, MAX(datetime)
+                FROM daily_stock_data
+                WHERE datetime <= ?
+                GROUP BY ticker;
+                ''',
+                (period_end,)
+            )
+
             period_start = portfolio.created_timestamp
+        else:
+            cursor = db_connection.execute(
+                f'''
+                        SELECT ticker, close, MAX(datetime)
+                        FROM daily_stock_data
+                        WHERE ? <= datetime AND datetime <= ?
+                        GROUP BY ticker;
+                        ''',
+                (period_start, period_end,)
+            )
 
-        cursor = db_connection.execute(
-            f'''
-            SELECT ticker, close, MAX(datetime)
-            FROM daily_stock_data
-            WHERE ? <= datetime AND datetime <= ?
-            GROUP BY ticker;
-            ''',
-            (period_start, period_end,)
-        )
-
-        stock_prices = {row['ticker']: row['close'] for row in cursor}
+        stock_prices = {row['ticker']: row for row in cursor}
         cursor.close()
 
         self.total_deposits: float = 0.0
@@ -330,7 +351,7 @@ class PortfolioSummary:
                 self.total_open_position_cost += position.cost
 
                 try:
-                    stock_price = stock_prices[position.ticker]
+                    stock_price = stock_prices[position.ticker]['close']
 
                     self.total_open_position_value += position.current_value(stock_price)
                 except KeyError:

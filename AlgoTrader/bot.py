@@ -109,7 +109,7 @@ class MACDBot(TradingBotABC):
 
     def update(self, today: datetime.datetime):
         if str(today) in self.historical_tickers:
-            self._tickers = self.historical_tickers[str(today)].copy()
+            self._tickers = self.historical_tickers[str(today)]
 
         for ticker in self.tickers:
             try:
@@ -139,7 +139,7 @@ class MACDBot(TradingBotABC):
                 if quantity > 0:
                     self._broker.execute_buy_order(ticker, quantity, self.portfolio_id)
 
-                    print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price}')
+                    print(f'{log_prefix} Opened new position: {quantity} share(s) @ {market_price:.2f}')
             elif should_sell:
                 market_price = data['close']
 
@@ -149,7 +149,7 @@ class MACDBot(TradingBotABC):
                 total_cost: float = 0.0
                 total_exit_value: float = 0.0
 
-                for position in self._broker.get_open_positions(self.portfolio_id):
+                for position in self._broker.get_open_positions(self.portfolio_id).copy():
                     if position.ticker == ticker and position.current_value(market_price) > position.entry_value:
                         self._broker.close_position(position)
 
@@ -164,6 +164,6 @@ class MACDBot(TradingBotABC):
                     percent_change = (total_exit_value / total_cost) * 100 - 100
 
                     print(
-                        f'{log_prefix} Closed {num_closed_positions} position(s) @ {market_price} for a net profit of '
-                        f'{net_pl:.2f} ({percent_change:.2f}%)(sold {quantity_sold} share(s) with an average cost of '
-                        f'{avg_cost:.2f}/share).')
+                        f'{log_prefix} Closed {num_closed_positions} position(s) @ {market_price:.2f} for a net profit '
+                        f'of {net_pl:.2f} ({percent_change:.2f}%)(sold {quantity_sold} share(s) with an average cost of'
+                        f' {avg_cost:.2f}/share).')

@@ -12,21 +12,32 @@ class Position:
     def __init__(self, portfolio_id: PortfolioID, ticker: Ticker,
                  entry_price: float, quantity: int,
                  open_timestamp: datetime.datetime,
-                 db_connection: sqlite3.Connection):
+                 db_connection: Optional[sqlite3.Connection],
+                 position_id: Optional[PositionID] = None):
         """
         Enter a new position (buy an amount of a security).
+
+        Notes:
+        - Only one of `db_connection` or `position_id` must be specified.
+        - The `position_id` argument is mainly for batch operations and internal use. If you are creating a single
+        position, or creating positions infrequently, using the `db_connection` argument so the ID can be inferred will
+        likely result in less rows inserted with duplicate primary keys and less bugs in your code.
 
         :param portfolio_id: The portfolio this position will belong to.
         :param ticker: The ticker of the security that is being bought.
         :param entry_price: The current price of the security.
         :param quantity: How many shares of the security that is being bought.
         :param open_timestamp: When this position is being opened.
-        :param db_connection: A connection to a database that can be queried for data on positions.
+        :param db_connection: (optional) A connection to a database that can be queried for data on positions.
+        :param position_id: (optional) The pre-determined ID of the position.
         """
         assert quantity >= 1, 'Cannot open a position with less than one share.'
+        assert (db_connection is not None and position_id is None) or \
+               (db_connection is None and position_id is not None), \
+            "You must specify only one of 'db_connection' or 'position_id', not both nor neither."
 
         self._portfolio_id = portfolio_id
-        self._ticker: Ticker = ticker
+        self.ticker: Ticker = ticker
         self._quantity: int = quantity
         self._entry_price: float = entry_price
         self._exit_price: float = 0.0
@@ -34,17 +45,19 @@ class Position:
         self._closed_timestamp: Optional[datetime.datetime] = None
         self._dividends_received = 0.00
         self._cash_settlements_received = 0.00
-        self._pl_realised: float = 0.0
-        self._is_closed: bool = False
+        self.is_closed: bool = False
 
-        with db_connection:
-            cursor = db_connection.execute(
-                "INSERT INTO position (portfolio_id, ticker) VALUES (?, ?)",
-                (self.portfolio_id, self.ticker,)
-            )
+        if db_connection is not None:
+            with db_connection:
+                cursor = db_connection.execute(
+                    "INSERT INTO position (portfolio_id, ticker) VALUES (?, ?)",
+                    (self.portfolio_id, self.ticker,)
+                )
 
-            self._id = PositionID(cursor.lastrowid)
-            cursor.close()
+                self._id = PositionID(cursor.lastrowid)
+                cursor.close()
+        else:
+            self._id = PositionID(position_id)
 
     @property
     def id(self) -> PositionID:
@@ -54,16 +67,6 @@ class Position:
     def portfolio_id(self) -> PortfolioID:
         """Get the ID of the portfolio that this position belongs to."""
         return self._portfolio_id
-
-    @property
-    def ticker(self) -> Ticker:
-        """The ticker of the security that this position is invested in."""
-        return self._ticker
-
-    @property
-    def is_closed(self) -> bool:
-        """Whether the position is closed or not (i.e. still open)."""
-        return self._is_closed
 
     @property
     def opened_timestamp(self) -> datetime.datetime:
@@ -192,15 +195,14 @@ class Position:
         :param timestamp: The time (and date) that the position is being closed at.
         :return: The value that the position closed at.
         """
-        assert self._is_closed is not True, "Attempt to close a position that has already been closed."
+        assert self.is_closed is not True, "Attempt to close a position that has already been closed."
 
         self._exit_price = price
-        self._pl_realised = self._quantity * (self._exit_price - self._entry_price)
-        self._is_closed = True
+        self.is_closed = True
         self._closed_timestamp = timestamp
 
         return self.exit_value
 
     def __repr__(self):
-        return (f'{self.__class__.__name__}(ticker={self._ticker}, entry_price={self.entry_price}, '
+        return (f'{self.__class__.__name__}(ticker={self.ticker}, entry_price={self.entry_price}, '
                 f'quantity={self.quantity})')

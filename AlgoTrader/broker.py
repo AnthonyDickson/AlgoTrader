@@ -6,7 +6,7 @@ from typing import Dict, List, DefaultDict, Optional, Union, Any, Tuple, Set
 
 from AlgoTrader.portfolio import Portfolio
 from AlgoTrader.position import Position
-from AlgoTrader.types import PortfolioID, Ticker, PositionID, TransactionType
+from AlgoTrader.types import PortfolioID, Ticker, PositionID, TransactionType, Transaction, BuyOrder
 
 
 # TODO: Create local transaction log (which syncs with the database, ideally asynchronously) and keep running totals.
@@ -25,7 +25,15 @@ from AlgoTrader.types import PortfolioID, Ticker, PositionID, TransactionType
 # LIMIT 1;.
 #
 class Broker:
-    """A broker manages portfolios and executes buy/sell orders on behalf of traders."""
+    """
+    A broker manages portfolios and executes buy/sell orders on behalf of traders.
+
+    The broker can be slow when dealing with high volumes of buy/sell orders. To mitigate this, you should use the
+    Broker object as a context manager:
+    > my_broker = Broker(...)
+    > with my_broker:
+    >    # Issue buy/sell orders
+    """
 
     def __init__(self, spx_changes, database_connection: sqlite3.Connection):
         """
@@ -48,6 +56,10 @@ class Broker:
 
         self.position_by_id: Dict[PositionID, Position] = dict()
         self.positions_by_ticker: DefaultDict[Ticker, List[Position]] = defaultdict(lambda: [])
+
+        self.buy_order_queue: List[BuyOrder] = list()
+        self.transactions_queue: List[Transaction] = list()
+        self._in_batch_mode: bool = False
 
     def seed_data(self, date: datetime.datetime):
         """
@@ -72,7 +84,7 @@ class Broker:
         )
 
         self.yesterdays_stock_data = self.stock_data
-        self.stock_data = {row['ticker']: {key: row[key] for key in row.keys()} for row in cursor}
+        self.stock_data = {row['ticker']: row for row in cursor}
 
         for ticker in self.stock_data:
             self.last_known_prices[ticker] = self.stock_data[ticker]
@@ -254,7 +266,7 @@ class Broker:
             portfolio.deposit(price)
         elif transaction_type == TransactionType.WITHDRAWAL:
             portfolio.withdraw(price)
-        elif transaction_type == TransactionType.BUY:
+        elif transaction_type == TransactionType.BUY and not self._in_batch_mode:
             position = portfolio.open_position(ticker, price, quantity,
                                                self.today)
 
@@ -278,14 +290,24 @@ class Broker:
                                   TransactionType.TAX}:
             quantity = 1
 
-        with self.db_connection:
-            self.db_connection.execute(
-                '''
-                INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
-                    VALUES (?, ?, (SELECT transaction_type.id FROM transaction_type WHERE name=?), ?, ?, ?)
-                ''',
-                (portfolio.id, position_id, transaction_type.name, quantity, price, self.today)
-            )
+        # Have to deal with buy orders differently since the resulting transaction will depend on data that is not yet
+        # available.
+        if self._in_batch_mode:
+            if transaction_type == TransactionType.BUY:
+                portfolio.pay_for_buy_order(quantity * price)
+                self.buy_order_queue.append((portfolio.id, ticker, quantity, price, self.today))
+            else:
+                self.transactions_queue.append(
+                    (portfolio.id, position_id, transaction_type.value, quantity, price, self.today))
+        else:
+            with self.db_connection:
+                self.db_connection.execute(
+                    '''
+                    INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''',
+                    (portfolio.id, position_id, transaction_type.value, quantity, price, self.today)
+                )
 
     def _check_transaction_preconditions(self, transaction_type: TransactionType, ticker: Optional[Ticker],
                                          quantity: Optional[int], position_id: Optional[PositionID]):
@@ -301,9 +323,49 @@ class Broker:
 
         if transaction_type == TransactionType.BUY:
             assert quantity is not None, 'Quantity must be specified for a buy order.'
-
-        if transaction_type == TransactionType.BUY:
             assert ticker is not None, 'A ticker must be specified for a buy order.'
+
+    def __enter__(self):
+        self.buy_order_queue = list()
+        self.transactions_queue = list()
+        self._in_batch_mode = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with self.db_connection:
+            positions_to_insert = list()
+
+            next_position_id: int = \
+                self.db_connection.execute("SELECT IFNULL(MAX(id), 0) AS max_id FROM position").fetchone()['max_id'] + 1
+
+            for (portfolio_id, ticker, quantity, price, order_date) in self.buy_order_queue:
+                position_id = PositionID(next_position_id)
+
+                # Refund the prepaid amount to keep the account in balance.
+                self.portfolios[portfolio_id].refund_unfilled_buy_order(quantity * price)
+                position = self.portfolios[portfolio_id].open_position(ticker, price, quantity, order_date, position_id)
+                self.position_by_id[position.id] = position
+                self.positions_by_ticker[ticker].append(position)
+
+                positions_to_insert.append((position_id, portfolio_id, ticker))
+                self.transactions_queue.append(
+                    (portfolio_id, position_id, TransactionType.BUY.value, quantity, price, order_date))
+
+                next_position_id += 1
+
+            self.db_connection.executemany(
+                "INSERT INTO position (id, portfolio_id, ticker) VALUES (?, ?, ?)",
+                positions_to_insert
+            )
+
+            self.db_connection.executemany(
+                '''
+                INSERT INTO transactions (portfolio_id, position_id, type, quantity, price, timestamp) 
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''',
+                self.transactions_queue
+            )
+
+        self._in_batch_mode = False
 
     def print_report(self, portfolio_id: PortfolioID, date: datetime.datetime):
         """

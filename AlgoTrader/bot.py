@@ -150,7 +150,7 @@ class MACDBot(TradingBotABC):
                 total_exit_value: float = 0.0
 
                 for position in self._broker.get_open_positions(self.portfolio_id).copy():
-                    if position.ticker == ticker and position.current_value(market_price) > position.entry_value:
+                    if position.ticker == ticker and position.current_value(market_price) / position.entry_value > 1.1:
                         self._broker.close_position(position)
 
                         net_pl += position.realised_pl

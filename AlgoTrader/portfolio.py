@@ -16,6 +16,7 @@ class Portfolio:
         self._balance: float = 0.0
         self._contribution: float = 0.0
         self._taxes_paid: float = 0.0
+        self.taxes_owing: float = 0.0
         self._created_timestamp: datetime.datetime = timestamp
         self.positions: Set[Position] = set()
         self.open_positions: Set[Position] = set()
@@ -148,7 +149,7 @@ class Portfolio:
         tax_year = datetime.datetime(year=report_date.year - 1, month=1, day=1, hour=0, minute=0, second=0,
                                      microsecond=0)
 
-        return TaxReport(tax_year, self, self.db_connection)
+        return TaxReport(report_date, tax_year, self, self.db_connection)
 
     def deposit(self, amount: float):
         """
@@ -170,16 +171,25 @@ class Portfolio:
 
     # TODO: Use self._deduct() to deduct maximum amount, any left over amount should be automatically deducted from
     #  future income.
-    def deduct_taxes(self, amount: float):
+    def deduct_taxes(self, amount: float) -> float:
         """
         Pay the taxman.
 
-        Note: This may put the account into debt.
+        Notes:
+        - Will try to pay the amount plus any owing taxes.
+        - The actual amount paid will be the the lowest of the available cash and the total amount of tax owed.
 
         :param amount: The amount of taxes to deduct from the account.
+        :return: The actual amount of taxes paid.
         """
-        self._balance -= amount
-        self._taxes_paid += amount
+        amount_to_pay = min(self._balance, amount)
+        amount_owing = amount - amount_to_pay
+
+        self._deduct(amount_to_pay)
+        self._taxes_paid += amount_to_pay
+        self.taxes_owing = amount_owing
+
+        return amount_to_pay
 
     def pay_dividend(self, amount: float, position: Position):
         """
@@ -337,6 +347,9 @@ class PortfolioSummary:
         self.period_end = period_end
         self.portfolio_age: float = (self.period_end - self.date_created).days / 365.25
 
+        self.total_taxes_owing: float = portfolio.taxes_owing
+        self.total_taxes = self.total_taxes_paid + self.total_taxes_owing
+
         self.total_num_closed_positions: float = 0.0
         self.total_num_open_positions: float = 0.0
         self.total_closed_position_cost: float = 0.0
@@ -387,7 +400,7 @@ class PortfolioSummary:
             self.net_unrealised_pl_percentage = 0.0
 
         self.revenue = self.total_adjustments + self.total_closed_position_value
-        self.expenses = self.total_position_cost + self.total_taxes_paid
+        self.expenses = self.total_position_cost + self.total_taxes
         self.net_income = self.revenue - self.expenses
 
         self.net_contribution = self.total_deposits - self.total_withdrawals
@@ -437,10 +450,12 @@ class PortfolioSummary:
                     cash_settlements, 
                     expenses, 
                     taxes, 
+                    taxes_paid,
+                    taxes_owing,
                     expenses_equities
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (self.period_end,
@@ -471,7 +486,9 @@ class PortfolioSummary:
                  self.total_dividends_received,
                  self.total_cash_settlements_received,
                  self.expenses,
+                 self.total_taxes,
                  self.total_taxes_paid,
+                 self.total_taxes_owing,
                  self.total_position_cost
                  )
             )
@@ -510,7 +527,9 @@ class PortfolioSummary:
         result += f'\t\t\t\t\tDividends:         {self.total_dividends_received:.2f}\n'
         result += f'\t\t\t\t\tCash Settlements:  {self.total_cash_settlements_received:.2f}\n'
         result += f'\t\t\tExpenses: ({self.expenses:.2f})\n'
-        result += f'\t\t\t\tTaxes:    ({self.total_taxes_paid:.2f})\n'
+        result += f'\t\t\t\tTaxes:    ({self.total_taxes:.2f})\n'
+        result += f'\t\t\t\t\tPaid:     ({self.total_taxes_paid:.2f})\n'
+        result += f'\t\t\t\t\tOwing:    ({self.total_taxes_owing:.2f})\n'
         result += f'\t\t\t\tEquities: ({self.total_position_cost:.2f})\n'
         result += f'\t\t\t\t\tOpen Positions:   ({self.total_open_position_cost:.2f})\n'
         result += f'\t\t\t\t\tClosed Positions: ({self.total_closed_position_cost:.2f})\n'
@@ -532,10 +551,12 @@ class TaxReport:
     holding_period_length = 121
     min_holding_period = 60
 
-    def __init__(self, tax_year: datetime.datetime, portfolio: Portfolio, db_connection: sqlite3.Connection):
+    def __init__(self, report_date: datetime.datetime, tax_year: datetime.datetime, portfolio: Portfolio,
+                 db_connection: sqlite3.Connection):
         """
         Create a tax report for a given year.
 
+        :param report_date: The date the report was created.
         :param tax_year: The tax year to calculate taxes for.
         :param portfolio: The portfolio to calculate taxes for.
         :param db_connection: A database connection that can be used for querying tax rates.
@@ -544,7 +565,7 @@ class TaxReport:
         # TODO: Account for milliseconds? Not necessary?
         self.end_of_tax_year = datetime.datetime(year=tax_year.year, month=12, day=31,
                                                  hour=23, minute=59, second=59)
-        self.report_date = datetime.datetime(tax_year.year + 1, 4, 15)
+        self.report_date = report_date
 
         self.portfolio_id = portfolio.id
 

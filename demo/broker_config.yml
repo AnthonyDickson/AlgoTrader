@@ -1,0 +1,8 @@
+---
+database_path: ./data.db
+# A file containing the changes to the SPX and the dates of when these changes happened.
+spx_change_list: ./ticker_lists/spx_changes.json
+# How often to create summary reports of the portfolios that the broker is managing.
+# Valid formats for frequencies/time periods is an integer followed by: 'd' for day, 'm' for month', 'q' for quarter or
+# 'y' for year. For example, '5d' would be five days, '2w' would be two weeks and '1y' would be one year.
+report_frequency: 1q

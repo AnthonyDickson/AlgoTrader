@@ -8,6 +8,21 @@ from AlgoTrader.types import PortfolioID, Ticker, PositionID
 # TODO: Sync state with database.
 # TODO: Use database data to calculate stats.
 class Position:
+    """An object representing an amount of a security owned by an individual.
+
+    :attribute portfolio_id: The ID of the portfolio the bot should use when trading.
+    :attribute ticker: The ticker of the security that this position is invested in.
+    :attribute quantity: The number of shares purchased for this position.
+    :attribute entry_price: The price per share when the position was opened.
+    :attribute exit_price: The price per share when the position was closed.
+                        This is None while the position is still open.
+    :attribute opened_timestamp: The timestamp indicating when this position was opened.
+    :attribute closed_timestamp: The timestamp indicating when this position was closed.
+                                 This is None while the position is still open.
+    :attribute dividends_received: How much this position has earned in dividends.
+    :attribute cash_settlements: How much this position has received in cash settlements.
+    :attribute is_closed: Whether or not this position has been closed yet.
+    """
 
     def __init__(self, portfolio_id: PortfolioID, ticker: Ticker,
                  entry_price: float, quantity: int,
@@ -36,15 +51,15 @@ class Position:
                (db_connection is None and position_id is not None), \
             "You must specify only one of 'db_connection' or 'position_id', not both nor neither."
 
-        self._portfolio_id = portfolio_id
+        self.portfolio_id = portfolio_id
         self.ticker: Ticker = ticker
-        self._quantity: int = quantity
-        self._entry_price: float = entry_price
-        self._exit_price: float = 0.0
-        self._opened_timestamp: datetime.datetime = open_timestamp
-        self._closed_timestamp: Optional[datetime.datetime] = None
-        self._dividends_received = 0.00
-        self._cash_settlements_received = 0.00
+        self.quantity: int = quantity
+        self.entry_price: float = entry_price
+        self.exit_price: Optional[float] = None
+        self.opened_timestamp: datetime.datetime = open_timestamp
+        self.closed_timestamp: Optional[datetime.datetime] = None
+        self.dividends_received = 0.00
+        self.cash_settlements_received = 0.00
         self.is_closed: bool = False
 
         if db_connection is not None:
@@ -54,47 +69,15 @@ class Position:
                     (self.portfolio_id, self.ticker,)
                 )
 
-                self._id = PositionID(cursor.lastrowid)
+                self.id = PositionID(cursor.lastrowid)
                 cursor.close()
         else:
-            self._id = PositionID(position_id)
-
-    @property
-    def id(self) -> PositionID:
-        return self._id
-
-    @property
-    def portfolio_id(self) -> PortfolioID:
-        """Get the ID of the portfolio that this position belongs to."""
-        return self._portfolio_id
-
-    @property
-    def opened_timestamp(self) -> datetime.datetime:
-        """The period_end indicating when this position was opened."""
-        return self._opened_timestamp
-
-    @property
-    def closed_timestamp(self) -> Optional[datetime.datetime]:
-        """
-        The period_end indicating when this position was closed.
-        Note: This will be None if the position is still open.
-        """
-        return self._closed_timestamp
-
-    @property
-    def entry_price(self) -> float:
-        """The price per share when the position was opened."""
-        return self._entry_price
-
-    @property
-    def quantity(self):
-        """The number of shares purchased for this position."""
-        return self._quantity
+            self.id = PositionID(position_id)
 
     @property
     def entry_value(self) -> float:
         """The value of the position when it was opened."""
-        return self._quantity * self._entry_price
+        return self.quantity * self.entry_price
 
     @property
     def cost(self) -> float:
@@ -106,22 +89,7 @@ class Position:
         """The value of the position when it was closed."""
         assert self.is_closed, 'Cannot get the exit value of a position that is still open.'
 
-        return self.quantity * self._exit_price
-
-    @property
-    def dividends_received(self) -> float:
-        """How much this position has earned in dividends."""
-        return self._dividends_received
-
-    @property
-    def cash_settlements_received(self) -> float:
-        """How much this position has received in cash settlements."""
-        return self._cash_settlements_received
-
-    @cash_settlements_received.setter
-    def cash_settlements_received(self, value: float):
-        """How much this position has received in cash settlements."""
-        self._cash_settlements_received = value
+        return self.quantity * self.exit_price
 
     @property
     def adjustments(self) -> float:
@@ -140,7 +108,7 @@ class Position:
         :param current_price: The current price of the security this position is invested in.
         :return: the unrealised profit and loss of the position
         """
-        return self._quantity * (current_price - self._entry_price)
+        return self.quantity * (current_price - self.entry_price)
 
     def current_value(self, current_price) -> float:
         """
@@ -161,7 +129,7 @@ class Position:
         assert dividend_per_share > 0, f'Cannot pay a non-positive dividend of {dividend_per_share}.'
 
         total_dividend_amount = self.quantity * dividend_per_share
-        self._dividends_received += total_dividend_amount
+        self.dividends_received += total_dividend_amount
 
         return total_dividend_amount
 
@@ -183,7 +151,7 @@ class Position:
         whole_shares, fractional_shares = divmod(self.quantity * split_coefficient, 1.0)
         adjusted_price = self.entry_price / split_coefficient
         cash_settlement_amount = fractional_shares * adjusted_price
-        self._cash_settlements_received += cash_settlement_amount
+        self.cash_settlements_received += cash_settlement_amount
 
         return whole_shares, fractional_shares, adjusted_price, cash_settlement_amount
 
@@ -197,9 +165,9 @@ class Position:
         """
         assert self.is_closed is not True, "Attempt to close a position that has already been closed."
 
-        self._exit_price = price
+        self.exit_price = price
         self.is_closed = True
-        self._closed_timestamp = timestamp
+        self.closed_timestamp = timestamp
 
         return self.exit_value
 

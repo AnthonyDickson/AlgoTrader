@@ -1,67 +1,68 @@
 import datetime
 import sqlite3
-from typing import Set, Optional, Dict, Tuple
+from collections import defaultdict
+from typing import Set, Optional, Dict, Tuple, Any, DefaultDict
 
 from AlgoTrader.exceptions import InsufficientFundsError
-from AlgoTrader.formatting import format_net_value
 from AlgoTrader.position import Position
 from AlgoTrader.types import PortfolioID, Ticker, TransactionType, PositionID
 
 
 # TODO: Sync state with database.
 class Portfolio:
+    """
+    A range of positions held by an individual.
 
-    def __init__(self, owner_name: str, timestamp: datetime.datetime,
+    This object helps track and report on investments made by an individual.
+
+    :attribute id: The ID of this portfolio.
+    :attribute balance: The available amount of cash.
+    :attribute owner_name: The name of the owner of this portfolio.
+    :attribute contribution: The amount of cash that has been added to the portfolio
+                             (e.g. the user depositing money into their brokerage account).
+    :attribute date_created: When this portfolio was created.
+    :attribute tickers: The set of tickers that this portfolio has traded in.
+    :attribute positions: The set of positions belonging to this portfolio.
+    :attribute open_positions: The subset of `positions` that contains all open positions in this portfolio.
+    :attribute closed_positions: The subset of `positions` that contains all closed positions in this portfolio.
+    :attribute positions_by_id: The set of positions belonging to this portfolio indexed by their ID.
+    :attribute taxes_paid: How much taxes this portfolio has paid to date.
+    :attribute taxes_owing: How much taxes this portfolio owes at present.
+    :attribute db_connection: A database connection that allows querying for portfolio related data.
+    """
+
+    def __init__(self, owner_name: str, date_created: datetime.datetime,
                  db_connection: sqlite3.Connection):
-        self._balance: float = 0.0
-        self._contribution: float = 0.0
-        self._taxes_paid: float = 0.0
+        """
+        Create a new portfolio.
+
+        :param owner_name: The name of the owner of the portfolio being created.
+        :param date_created: The date (timestamp) when this portfolio is being created.
+        :param db_connection: A database connection that allows querying for portfolio related data.
+        """
+        self.balance: float = 0.0
+        self.contribution: float = 0.0
+        self.taxes_paid: float = 0.0
         self.taxes_owing: float = 0.0
-        self._created_timestamp: datetime.datetime = timestamp
+        self.date_created: datetime.datetime = date_created
+        self.tickers: Set[Ticker] = set()
         self.positions: Set[Position] = set()
         self.open_positions: Set[Position] = set()
+        self.open_positions_by_ticker: DefaultDict[Ticker, Set[Position]] = defaultdict(lambda: set())
         self.closed_positions: Set[Position] = set()
         self.positions_by_id: Dict[PositionID, Position] = dict()
-        self._tickers: Set[Ticker] = set()
 
-        self._owner_name = owner_name
+        self.owner_name = owner_name
 
         self.db_connection = db_connection
 
         with self.db_connection:
             cursor = self.db_connection.execute('''
                     INSERT INTO portfolio (owner_name) VALUES (?)
-                    ''', (self._owner_name,))
+                    ''', (self.owner_name,))
 
-            self._id = PortfolioID(cursor.lastrowid)
+            self.id = PortfolioID(cursor.lastrowid)
             cursor.close()
-
-    @property
-    def id(self) -> PortfolioID:
-        return self._id
-
-    @property
-    def tickers(self) -> Set[Ticker]:
-        """The set of tickers of the positions in this portfolio."""
-        return self._tickers
-
-    @property
-    def contribution(self):
-        """
-        The amount of cash that has been added to the portfolio
-        (e.g. the user transferring money into their brokerage account).
-        """
-        return self._contribution
-
-    @property
-    def taxes_paid(self) -> float:
-        """How much taxes this portfolio has paid to date."""
-        return self._taxes_paid
-
-    @property
-    def balance(self) -> float:
-        """The available amount of cash."""
-        return self._balance
 
     def sync(self):
         """Sync the portfolio data with the database."""
@@ -74,10 +75,10 @@ class Portfolio:
         cursor.close()
 
         # TODO: Fix database and local balances diverging due to different floating point precision...
-        # assert abs(self._balance - new_balance) < sys.float_info.epsilon, \
-        #     f"Balances do not match: expected {new_balance}, but got {self._balance}"
+        # assert abs(self.balance - new_balance) < sys.float_info.epsilon, \
+        #     f"Balances do not match: expected {new_balance}, but got {self.balance}"
 
-        self._balance = new_balance
+        self.balance = new_balance
 
     def open_position(self, ticker: Ticker, price: float, quantity: int,
                       timestamp: datetime.datetime, position_id: Optional[PositionID] = None) -> Position:
@@ -105,9 +106,10 @@ class Portfolio:
             position_id
         )
 
-        self._tickers.add(position.ticker)
+        self.tickers.add(position.ticker)
         self.positions.add(position)
         self.open_positions.add(position)
+        self.open_positions_by_ticker[ticker].add(position)
         self.positions_by_id[position.id] = position
 
         return position
@@ -123,20 +125,24 @@ class Portfolio:
         """
         assert position in self.positions, 'Cannot close a position that does not belong to this portfolio.'
 
-        self._balance += position.close(price, timestamp)
+        self.balance += position.close(price, timestamp)
         self.open_positions.discard(position)
+        self.open_positions_by_ticker[position.ticker].discard(position)
         self.closed_positions.add(position)
 
     def create_summary(self, period_end: datetime.datetime,
-                       period_start: Optional[datetime.datetime] = None) -> 'PortfolioSummary':
+                       period_start: Optional[datetime.datetime] = None,
+                       last_known_prices: Optional[Dict[Ticker, Dict[str, Any]]] = None) -> 'PortfolioSummary':
         """
         Create a summary of the portfolio.
 
         :param period_end: The last date that is included in the reporting period.
         :param period_start: (optional) The first date that is included in the reporting period. If not specified, then
-        the created_timestamp for when the portfolio was created will be used.
+        the date_created for when the portfolio was created will be used.
+        :param last_known_prices: (optional) The last known prices as of the period end. If this is None, then the
+        prices are fetched from the database (this may be quite slow).
         """
-        return PortfolioSummary(self, self.db_connection, period_end, period_start)
+        return PortfolioSummary(self, self.db_connection, period_end, period_start, last_known_prices)
 
     def generate_tax_report(self, report_date: datetime.datetime) -> 'TaxReport':
         """
@@ -159,7 +165,7 @@ class Portfolio:
         :param amount: The amount to add to the portfolio.
         """
         self._pay(amount)
-        self._contribution += amount
+        self.contribution += amount
 
     def withdraw(self, amount: float):
         """
@@ -169,8 +175,6 @@ class Portfolio:
         """
         self._deduct(amount)
 
-    # TODO: Use self._deduct() to deduct maximum amount, any left over amount should be automatically deducted from
-    #  future income.
     def deduct_taxes(self, amount: float) -> float:
         """
         Pay the taxman.
@@ -182,11 +186,11 @@ class Portfolio:
         :param amount: The amount of taxes to deduct from the account.
         :return: The actual amount of taxes paid.
         """
-        amount_to_pay = min(self._balance, amount)
+        amount_to_pay = min(self.balance, amount)
         amount_owing = amount - amount_to_pay
 
         self._deduct(amount_to_pay)
-        self._taxes_paid += amount_to_pay
+        self.taxes_paid += amount_to_pay
         self.taxes_owing = amount_owing
 
         return amount_to_pay
@@ -244,7 +248,7 @@ class Portfolio:
         if amount < 0:
             raise ValueError(f'Cannot add negative amount {amount} to balance.')
         elif amount > 0:
-            self._balance += amount
+            self.balance += amount
 
     def _deduct(self, amount: float):
         """
@@ -255,11 +259,7 @@ class Portfolio:
         if amount > self.balance:
             raise InsufficientFundsError(f"Not enough funds to deduct {amount}.")
         else:
-            self._balance -= amount
-
-    @property
-    def created_timestamp(self):
-        return self._created_timestamp
+            self.balance -= amount
 
 
 # TODO: Update to use data from database.
@@ -270,40 +270,42 @@ class PortfolioSummary:
     """Summary report of the performance of the portfolio."""
 
     def __init__(self, portfolio: Portfolio, db_connection: sqlite3.Connection, period_end: datetime.datetime,
-                 period_start: Optional[datetime.datetime] = None):
+                 period_start: Optional[datetime.datetime] = None,
+                 last_known_prices: Dict[Ticker, Dict[str, Any]] = None):
         """
         Create a summary report of a portfolio.
         :param portfolio: The portfolio to report on.
         :param db_connection: A database connection that can be used to query for stock price and transaction data.
         :param period_end: The lsat date that is included in the reporting period.
         :param period_start: (optional) The first date that is included in the reporting period. If not specified, then
-        the created_timestamp for when the portfolio was created will be used.
+        the timestamp for when the portfolio was created will be used.
+        :param last_known_prices: (optional) The last known prices as of the period end. If this is None, then the
+        prices are fetched from the database (this may be quite slow).
         """
-        if period_start is None:
-            cursor = db_connection.execute(
-                f'''
-                SELECT ticker, close, MAX(datetime)
-                FROM daily_stock_data
-                WHERE datetime <= ?
-                GROUP BY ticker;
-                ''',
-                (period_end,)
-            )
+        if not last_known_prices:
+            if period_start is None:
+                cursor = db_connection.execute(
+                    f'''
+                    SELECT ticker, close, MAX(datetime)
+                    FROM daily_stock_data
+                    WHERE datetime <= ?
+                    GROUP BY ticker;
+                    ''',
+                    (period_end,)
+                )
+            else:
+                cursor = db_connection.execute(
+                    f'''
+                            SELECT ticker, close, MAX(datetime)
+                            FROM daily_stock_data
+                            WHERE ? <= datetime AND datetime <= ?
+                            GROUP BY ticker;
+                            ''',
+                    (period_start, period_end,)
+                )
 
-            period_start = portfolio.created_timestamp
-        else:
-            cursor = db_connection.execute(
-                f'''
-                        SELECT ticker, close, MAX(datetime)
-                        FROM daily_stock_data
-                        WHERE ? <= datetime AND datetime <= ?
-                        GROUP BY ticker;
-                        ''',
-                (period_start, period_end,)
-            )
-
-        stock_prices = {row['ticker']: row for row in cursor}
-        cursor.close()
+            last_known_prices = {row['ticker']: row for row in cursor}
+            cursor.close()
 
         self.total_deposits: float = 0.0
         self.total_withdrawals: float = 0.0
@@ -311,17 +313,30 @@ class PortfolioSummary:
         self.total_cash_settlements_received: float = 0.0
         self.total_taxes_paid: float = 0.0
 
-        cursor = db_connection.execute(
-            f"""
-            SELECT type, SUM(price * quantity) AS total
-            FROM transactions 
-            WHERE portfolio_id = ? AND ? <= timestamp AND timestamp <= ? AND type IN (?, ?, ?, ?, ?)
-            GROUP BY type;
-            """,
-            (portfolio.id, period_start, period_end,
-             TransactionType.DEPOSIT.value, TransactionType.WITHDRAWAL.value,
-             TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value, TransactionType.TAX.value)
-        )
+        if period_start:
+            cursor = db_connection.execute(
+                f"""
+                SELECT type, SUM(price * quantity) AS total
+                FROM transactions 
+                WHERE portfolio_id = ? AND ? <= timestamp AND timestamp <= ? AND type IN (?, ?, ?, ?, ?)
+                GROUP BY type;
+                """,
+                (portfolio.id, period_start, period_end,
+                 TransactionType.DEPOSIT.value, TransactionType.WITHDRAWAL.value,
+                 TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value, TransactionType.TAX.value)
+            )
+        else:
+            cursor = db_connection.execute(
+                f"""
+                SELECT type, SUM(price * quantity) AS total
+                FROM transactions 
+                WHERE portfolio_id = ? AND timestamp <= ? AND type IN (?, ?, ?, ?, ?)
+                GROUP BY type;
+                """,
+                (portfolio.id, period_end,
+                 TransactionType.DEPOSIT.value, TransactionType.WITHDRAWAL.value,
+                 TransactionType.DIVIDEND.value, TransactionType.CASH_SETTLEMENT.value, TransactionType.TAX.value)
+            )
 
         for row in cursor:
             if row['type'] == TransactionType.DEPOSIT.value:
@@ -339,11 +354,10 @@ class PortfolioSummary:
 
         cursor.close()
 
-        self.db_connection = db_connection
-
-        self.date_created = portfolio.created_timestamp
+        self.date_created = portfolio.date_created
         self.portfolio_id = portfolio.id
-        self.period_start = period_start
+        self.portfolio_owner = portfolio.owner_name
+        self.period_start = period_start if period_start else self.date_created
         self.period_end = period_end
         self.portfolio_age: float = (self.period_end - self.date_created).days / 365.25
 
@@ -364,7 +378,7 @@ class PortfolioSummary:
                 self.total_open_position_cost += position.cost
 
                 try:
-                    stock_price = stock_prices[position.ticker]['close']
+                    stock_price = last_known_prices[position.ticker]['close']
 
                     self.total_open_position_value += position.current_value(stock_price)
                 except KeyError:
@@ -415,90 +429,94 @@ class PortfolioSummary:
         self.equity_change = (self.equity / self.total_deposits * 100) - 100
         self.equity_cagr = (self.equity / self.total_deposits) ** (1 / self.portfolio_age) - 1
 
-    def upload(self):
-        """Upload the report to the database."""
-        with self.db_connection:
-            self.db_connection.execute(
-                """
-                INSERT INTO portfolio_report (
-                    report_date, 
-                    portfolio_id,
-                    net_pl, 
-                    net_pl_percentage, 
-                    realised_pl, 
-                    realised_pl_percentage, 
-                    closed_position_value, 
-                    closed_position_cost, 
-                    unrealised_pl, 
-                    unrealised_pl_percentage, 
-                    open_position_value, 
-                    open_position_cost, 
-                    equity, 
-                    equity_change, 
-                    cagr, 
-                    accounts_receivable, 
-                    accounts_receivable_equities, 
-                    available_cash, 
-                    net_contribution, 
-                    deposits, 
-                    withdrawals, 
-                    net_income, 
-                    revenue, 
-                    revenue_equities, 
-                    adjustments,
-                    dividends, 
-                    cash_settlements, 
-                    expenses, 
-                    taxes, 
-                    taxes_paid,
-                    taxes_owing,
-                    expenses_equities
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )
-                """,
-                (self.period_end,
-                 self.portfolio_id,
-                 self.net_pl,
-                 self.net_pl_percentage,
-                 self.net_realised_pl,
-                 self.net_realised_pl_percentage,
-                 self.total_closed_position_value,
-                 self.total_closed_position_cost,
-                 self.net_unrealised_pl,
-                 self.net_unrealised_pl_percentage,
-                 self.total_open_position_value,
-                 self.total_open_position_cost,
-                 self.equity,
-                 self.equity_change,
-                 self.equity_cagr,
-                 self.accounts_receivable,
-                 self.total_open_position_value,
-                 self.available_cash,
-                 self.net_contribution,
-                 self.total_deposits,
-                 self.total_withdrawals,
-                 self.net_income,
-                 self.revenue,
-                 self.total_closed_position_value,
-                 self.total_adjustments,
-                 self.total_dividends_received,
-                 self.total_cash_settlements_received,
-                 self.expenses,
-                 self.total_taxes,
-                 self.total_taxes_paid,
-                 self.total_taxes_owing,
-                 self.total_position_cost
-                 )
+    def upload(self, db_connection: sqlite3.Connection):
+        """Upload the report to the database.
+
+        :param db_connection: A connection to the database.
+        """
+        db_connection.execute(
+            """
+            INSERT INTO portfolio_report (
+                report_date, 
+                portfolio_id,
+                net_pl, 
+                net_pl_percentage, 
+                realised_pl, 
+                realised_pl_percentage, 
+                closed_position_value, 
+                closed_position_cost, 
+                unrealised_pl, 
+                unrealised_pl_percentage, 
+                open_position_value, 
+                open_position_cost, 
+                equity, 
+                equity_change, 
+                cagr, 
+                accounts_receivable, 
+                accounts_receivable_equities, 
+                available_cash, 
+                net_contribution, 
+                deposits, 
+                withdrawals, 
+                net_income, 
+                revenue, 
+                revenue_equities, 
+                adjustments,
+                dividends, 
+                cash_settlements, 
+                expenses, 
+                taxes, 
+                taxes_paid,
+                taxes_owing,
+                expenses_equities
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
+            """,
+            (self.period_end,
+             self.portfolio_id,
+             self.net_pl,
+             self.net_pl_percentage,
+             self.net_realised_pl,
+             self.net_realised_pl_percentage,
+             self.total_closed_position_value,
+             self.total_closed_position_cost,
+             self.net_unrealised_pl,
+             self.net_unrealised_pl_percentage,
+             self.total_open_position_value,
+             self.total_open_position_cost,
+             self.equity,
+             self.equity_change,
+             self.equity_cagr,
+             self.accounts_receivable,
+             self.total_open_position_value,
+             self.available_cash,
+             self.net_contribution,
+             self.total_deposits,
+             self.total_withdrawals,
+             self.net_income,
+             self.revenue,
+             self.total_closed_position_value,
+             self.total_adjustments,
+             self.total_dividends_received,
+             self.total_cash_settlements_received,
+             self.expenses,
+             self.total_taxes,
+             self.total_taxes_paid,
+             self.total_taxes_owing,
+             self.total_position_cost
+             )
+        )
 
     def __str__(self) -> str:
         result = ''
 
         # TODO: Use multiline string instead.
         result += '#' * 80 + '\n'
-        result += 'Portfolio Summary\n'
+        result += f'Summary of Portfolio #{self.portfolio_id}\n'
+        result += f' held on behalf of {self.portfolio_owner}\n'
+        result += f' for the period {self.period_start.date()} to {self.period_end.date()}.\n'
         result += '#' * 80 + '\n'
 
         result += f'Net P&L: {format_net_value(self.net_pl)} {self.format_change(self.net_pl_percentage)}%\n'
@@ -713,3 +731,14 @@ Total Tax Payable: {self.total_tax:.2f}
                 payable_tax_by_rate[rate] = 0.0
 
         return total_tax, payable_tax_by_rate, taxable_amounts_by_rate
+
+
+def format_net_value(value: float) -> str:
+    formatted_value = f"{abs(value):.2f}"
+
+    if value < 0:
+        formatted_value = f"({formatted_value})"
+    else:
+        formatted_value = f" {formatted_value} "
+
+    return formatted_value

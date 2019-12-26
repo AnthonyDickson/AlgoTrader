@@ -110,7 +110,7 @@ def gen_rows(stock_price_data, macd_data, from_date):
                            'allowing for data to added to an existing database.',
                            kind='flag', abbrev='a')
 )
-def main(ticker_list: str = 'ticker_lists/djia.txt', config_file: str = 'config.json',
+def main(ticker_list: str = 'ticker_lists/djia.json', config_file: str = 'config.json',
          max_requests_per_minute: int = 5, append: bool = False):
     """
     Create and populate a SQLite database from API data.

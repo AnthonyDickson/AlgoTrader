@@ -74,6 +74,7 @@ dependencies:
     - prompt-toolkit==3.0.2
     - pygments==2.5.2
     - pyrsistent==0.15.6
+    - pyyaml==5.2
     - pyzmq==18.1.1
     - requests==2.22.0
     - send2trash==1.5.0

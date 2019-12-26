@@ -1,6 +1,0 @@
-{
-  "API_KEY": "",
-  "DATABASE_NUKE_SCRIPT": "./nuke_db.sql",
-  "DATABASE_CREATE_SCRIPT": "./create_db.sql",
-  "DATABASE_URL": "./data.db"
-}

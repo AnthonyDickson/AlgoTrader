@@ -15,9 +15,9 @@ Documentation is hosted on [GitBook](https://app.gitbook.com/@dican732/s/algotra
     ```
 3.  Copy and rename the example config file:
     ```bash
-    cp example.config.json config.json
+    cp example.config.yml config.yml
     ```
-    and then open `config.json` with a text-editor and fill in the field `"API_KEY": ""`
+    and then open `config.yml` with a text-editor and fill in the field `"API_KEY": ""`
 4.  Setup the conda environment:
     ```bash
     conda env create -f environment.yml
@@ -40,7 +40,7 @@ Documentation is hosted on [GitBook](https://app.gitbook.com/@dican732/s/algotra
     This means that if you wish to download data for all of the tickers in SPX, you will have to do this spread over 
     2-3 days. If you are going to do this, you should use the `-a` flag for each run:
     ```bash
-    python create_db.py --ticker_list ticker_lists/spy.txt -a
+    python create_db.py --ticker_list ticker_lists/spy.json -a
     ```
     Without this flag, the script will delete all data in the database.
     

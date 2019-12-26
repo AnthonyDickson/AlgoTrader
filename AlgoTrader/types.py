@@ -1,6 +1,6 @@
 import datetime
 import enum
-from typing import NewType, Tuple
+from typing import NewType, Tuple, Callable
 
 PortfolioID = NewType('PortfolioID', int)
 Ticker = NewType('Ticker', str)
@@ -20,3 +20,20 @@ class TransactionType(enum.Enum):
 
 BuyOrder = Tuple[PortfolioID, Ticker, int, float, datetime.datetime]
 Transaction = Tuple[PortfolioID, PositionID, TransactionType, int, float, datetime.datetime]
+
+
+@enum.unique
+class Period(enum.Enum):
+    DAILY = enum.auto()
+    WEEKLY = enum.auto()
+    MONTHLY = enum.auto()
+    QUARTERLY = enum.auto()
+    YEARLY = enum.auto()
+
+
+"""A function that takes a portfolio balance and market price of a share, and determines the number of shares to buy."""
+BuyQuantityFunc = Callable[[float, float], int]
+"""
+A function that takes the market value and purchase value of a position, and determines if the position should be sold.
+"""
+ShouldSellFunc = Callable[[float, float], bool]

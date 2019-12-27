@@ -17,7 +17,7 @@ Documentation is hosted on [GitBook](https://app.gitbook.com/@dican732/s/algotra
     ```bash
     cp example.config.yml config.yml
     ```
-    and then open `config.yml` with a text-editor and fill in the field `"API_KEY": ""`
+    and then open `config.yml` with a text-editor and fill in the field `API_KEY: ` with your API key.
 4.  Setup the conda environment:
     ```bash
     conda env create -f environment.yml
@@ -42,11 +42,13 @@ Documentation is hosted on [GitBook](https://app.gitbook.com/@dican732/s/algotra
     ```bash
     python create_db.py --ticker_list ticker_lists/spy.json -a
     ```
-    Without this flag, the script will delete all data in the database.
+    Without this flag, the script will delete all data in the database from previous runs.
+    **NOTE**: Although this limitation is mentioned on the API documentation webpage, this limit did not appear to exist 
+    the last time this code was run (Dec, 2019).
     
     Alternatively, you can download a ready-made version from [here](https://drive.google.com/file/d/10ivA-U-nbpmXK4EWsRyiOX-UhvVcyk9m/view).
     
-7.  Run a demo scipt, e.g.:
+7.  Run a demo script, e.g.:
     ```bash
-    python -m demo.macd_trader ticker_lists/djia_tickers.txt
+    python -m demo.backtest demo/broker_config.yml demo/macd_config.yml
     ```

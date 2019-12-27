@@ -64,22 +64,6 @@ class Portfolio:
             self.id = PortfolioID(cursor.lastrowid)
             cursor.close()
 
-    def sync(self):
-        """Sync the portfolio data with the database."""
-        cursor = self.db_connection.execute(
-            '''SELECT balance FROM portfolio_balance WHERE portfolio_id = ?''',
-            (self.id,)
-        )
-
-        new_balance = cursor.fetchone()['balance']
-        cursor.close()
-
-        # TODO: Fix database and local balances diverging due to different floating point precision...
-        # assert abs(self.balance - new_balance) < sys.float_info.epsilon, \
-        #     f"Balances do not match: expected {new_balance}, but got {self.balance}"
-
-        self.balance = new_balance
-
     def open_position(self, ticker: Ticker, price: float, quantity: int,
                       timestamp: datetime.datetime, position_id: Optional[PositionID] = None) -> Position:
         """

@@ -13,6 +13,7 @@ DROP INDEX IF EXISTS "transactions_portfolio_id_type_index";
 DROP INDEX IF EXISTS "transactions_position_id_index";
 DROP INDEX IF EXISTS "historical_marginal_tax_rates_tax_year_bracket_threshold_tax_rate_index";
 DROP INDEX IF EXISTS "historical_capital_gains_tax_rates_tax_year_bracket_threshold_tax_rate_index";
+DROP TABLE IF EXISTS "cpi_data";
 DROP INDEX IF EXISTS "daily_stock_data_dividend_amount_index";
 DROP INDEX IF EXISTS "daily_stock_data_datetime_index";
 DROP INDEX IF EXISTS "daily_stock_data_ticker_index";

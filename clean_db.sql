@@ -3,3 +3,4 @@ DELETE
 FROM portfolio;
 UPDATE sqlite_sequence
 SET seq=0;
+VACUUM;

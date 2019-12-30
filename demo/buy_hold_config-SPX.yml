@@ -7,11 +7,11 @@
 # Paths should either be relative to the root directory of the project, or absolute.
 
 # Config:
-name: 'MACD Momentum Trader (Simple Threshold)'
+name: 'Buy and Hold: SPX'
 # This should correspond to one of the trading bot classes.
-bot: MACDBot
+bot: BuyAndHoldBot
 initial_deposit: 100000
-# Periodic deposits into the portfolio. Set amount to zero to disable periodic contributions.
+# Contributions are periodic deposits into the portfolio.
 contribution:
   amount: 10000
   frequency: 1y
@@ -26,8 +26,5 @@ buy_quantity: 0.01
 # - the path to a JSON formatted file that contains a list of tickers;
 # - or, the path a JSON formatted file that contains multiple lists of tickers, indexed by date.
 ticker_list: ./ticker_lists/spx_historical.json
-# How much a position must appreciate before the bot is allowed to sell it (value is inclusive).
-# Setting this to a float will mean that this value will be interpreted as a percentage change.
-# For example, setting this to 0.1 would mean that the bot is only allowed to sell a position if its value has increased
-# by at least 10%.
-sell_threshold: 0
+# How often the bot should buy shares.
+buy_frequency: 1w

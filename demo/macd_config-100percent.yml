@@ -1,0 +1,33 @@
+---
+# Notes:
+
+# Valid formats for frequencies/time periods is an integer followed by: 'd' for day, 'm' for month', 'q' for quarter or
+# 'y' for year. For example, '5d' would be five days, '2w' would be two weeks and '1y' would be one year.
+
+# Paths should either be relative to the root directory of the project, or absolute.
+
+# Config:
+name: 'MACD: SPX Components - 100%'
+# This should correspond to one of the trading bot classes.
+bot: MACDBot
+initial_deposit: 100000
+# Periodic deposits into the portfolio. Set amount to zero to disable periodic contributions.
+contribution:
+  amount: 10000
+  frequency: 1y
+# Max amount of shares the bot will buy per buy order.
+# Setting this to a ratio will make the bot the maximum shares that it can afford with that percent of its available
+# cash. For example, setting this to 0.01 will mean that for each buy order the bot will purchase shares worth at most
+# 1% of its current available cash.
+buy_quantity: 0.01
+# The ticker list tells the bot what securities to buy & sell.
+# This can be one of three things:
+# - a list of tickers directly embedded into this config file;
+# - the path to a JSON formatted file that contains a list of tickers;
+# - or, the path a JSON formatted file that contains multiple lists of tickers, indexed by date.
+ticker_list: ./ticker_lists/spx_historical.json
+# How much a position must appreciate before the bot is allowed to sell it (value is inclusive).
+# Setting this to a float will mean that this value will be interpreted as a percentage change.
+# For example, setting this to 0.1 would mean that the bot is only allowed to sell a position if its value has increased
+# by at least 10%.
+sell_threshold: 1.0

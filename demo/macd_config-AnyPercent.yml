@@ -7,7 +7,7 @@
 # Paths should either be relative to the root directory of the project, or absolute.
 
 # Config:
-name: 'MACD Momentum Trader'
+name: 'MACD: SPX Components - Any%'
 # This should correspond to one of the trading bot classes.
 bot: MACDBot
 initial_deposit: 100000
@@ -30,4 +30,4 @@ ticker_list: ./ticker_lists/spx_historical.json
 # Setting this to a float will mean that this value will be interpreted as a percentage change.
 # For example, setting this to 0.1 would mean that the bot is only allowed to sell a position if its value has increased
 # by at least 10%.
-sell_threshold: 1.0
+sell_threshold: 0

@@ -24,18 +24,18 @@ These results were generated using the scripts, ticker lists and configuration f
     ```bash
     cp example.config.yml config.yml
     ```
-3.  Setup the conda environment:
-    ```bash
-    conda env create -f environment.yml
-    ```
-    You can get conda installed on your machine by following the instructions at 
-    [docs.conda.io](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html).   
-4.  Download a copy of a database containing historical stock data:
+3.  Download a copy of a database containing historical stock data:
     ```bash
     wget http://algotrader-data.s3.amazonaws.com/data.db
     ```
     This database contains historical stock data from near the start of 2000 up until 20 December 2019 sourced from [alphavantage.co](https://www.alphavantage.co/).
     If you want more up-to-date data then follow the steps in the sections below for building the database from scratch and creating an updated historical SPX tickers list.
+4.  Setup the conda environment:
+    ```bash
+    conda env create -f environment.yml
+    ```
+    You can get conda installed on your machine by following the instructions at 
+    [docs.conda.io](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html).   
 5.  Before you run any python code, activate the conda environment.
     ```bash
     conda activate AlgoTrader

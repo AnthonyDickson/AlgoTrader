@@ -24,9 +24,9 @@ These results were generated using the scripts, ticker lists and configuration f
     ```bash
     cp example.config.yml config.yml
     ```
-3.  Download a copy of a database containing historical stock data:
+3.  Download a copy of a database containing historical stock data and extract it:
     ```bash
-    wget http://algotrader-data.s3.amazonaws.com/data.db
+    wget https://www.icloud.com/iclouddrive/0afz62UVxGAINNjkZEamkMnpw#data
     ```
     This database contains historical stock data from near the start of 2000 up until 20 December 2019 sourced from [alphavantage.co](https://www.alphavantage.co/).
     If you want more up-to-date data then follow the steps in the sections below for building the database from scratch and creating an updated historical SPX tickers list.
